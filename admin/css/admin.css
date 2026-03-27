@@ -1,0 +1,685 @@
+/* ============================================================
+   WP AMBackup — Admin Styles
+   ============================================================ */
+
+:root {
+	--wpamb-primary:   #2271b1;
+	--wpamb-success:   #46b450;
+	--wpamb-danger:    #dc3232;
+	--wpamb-warning:   #dba617;
+	--wpamb-info:      #00a0d2;
+	--wpamb-purple:    #9b59b6;
+	--wpamb-dark:      #1d2327;
+	--wpamb-gray:      #646970;
+	--wpamb-light:     #f6f7f7;
+	--wpamb-border:    #c3c4c7;
+	--wpamb-radius:    6px;
+	--wpamb-shadow:    0 1px 3px rgba(0,0,0,.1);
+}
+
+/* ---- Layout ------------------------------------------------ */
+
+.wpamb-wrap {
+	max-width: 1200px;
+}
+
+.wpamb-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 1.5rem !important;
+	margin-bottom: 20px !important;
+}
+
+.wpamb-title .dashicons {
+	font-size: 28px;
+	width: 28px;
+	height: 28px;
+	color: var(--wpamb-primary);
+}
+
+.wpamb-version {
+	font-size: .75rem;
+	font-weight: 400;
+	color: var(--wpamb-gray);
+	background: var(--wpamb-light);
+	border: 1px solid var(--wpamb-border);
+	padding: 2px 8px;
+	border-radius: 20px;
+}
+
+/* ---- Cards ------------------------------------------------- */
+
+.wpamb-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 16px;
+	margin-bottom: 24px;
+}
+
+.wpamb-card {
+	background: #fff;
+	border-radius: var(--wpamb-radius);
+	padding: 20px;
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	box-shadow: var(--wpamb-shadow);
+	border-left: 4px solid var(--wpamb-primary);
+}
+
+.wpamb-card--blue   { border-left-color: var(--wpamb-primary); }
+.wpamb-card--green  { border-left-color: var(--wpamb-success); }
+.wpamb-card--orange { border-left-color: var(--wpamb-warning); }
+.wpamb-card--purple { border-left-color: var(--wpamb-purple); }
+
+.wpamb-card__icon .dashicons {
+	font-size: 32px;
+	width: 32px;
+	height: 32px;
+	color: var(--wpamb-primary);
+}
+.wpamb-card--green  .wpamb-card__icon .dashicons { color: var(--wpamb-success); }
+.wpamb-card--orange .wpamb-card__icon .dashicons { color: var(--wpamb-warning); }
+.wpamb-card--purple .wpamb-card__icon .dashicons { color: var(--wpamb-purple); }
+
+.wpamb-card__content {
+	display: flex;
+	flex-direction: column;
+}
+
+.wpamb-card__number {
+	font-size: 1.6rem;
+	font-weight: 700;
+	line-height: 1.1;
+	color: var(--wpamb-dark);
+}
+
+.wpamb-card__number--sm {
+	font-size: 1rem;
+}
+
+.wpamb-card__label {
+	font-size: .8rem;
+	color: var(--wpamb-gray);
+	margin-top: 4px;
+}
+
+/* ---- Box --------------------------------------------------- */
+
+.wpamb-box {
+	background: #fff;
+	border: 1px solid var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	padding: 24px;
+	margin-bottom: 20px;
+	box-shadow: var(--wpamb-shadow);
+}
+
+.wpamb-box h2 {
+	margin-top: 0;
+	font-size: 1.1rem;
+	border-bottom: 1px solid var(--wpamb-border);
+	padding-bottom: 12px;
+	margin-bottom: 20px;
+}
+
+/* ---- Buttons ----------------------------------------------- */
+
+.wpamb-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 16px;
+	border-radius: var(--wpamb-radius);
+	font-size: .875rem;
+	font-weight: 500;
+	cursor: pointer;
+	border: 1px solid transparent;
+	text-decoration: none;
+	transition: opacity .15s, background .15s;
+	line-height: 1.4;
+}
+
+.wpamb-btn:disabled,
+.wpamb-btn.loading {
+	opacity: .6;
+	cursor: not-allowed;
+}
+
+.wpamb-btn--primary {
+	background: var(--wpamb-primary);
+	color: #fff;
+	border-color: var(--wpamb-primary);
+}
+.wpamb-btn--primary:hover:not(:disabled) {
+	background: #135e96;
+	color: #fff;
+}
+
+.wpamb-btn--secondary {
+	background: #f6f7f7;
+	color: var(--wpamb-dark);
+	border-color: var(--wpamb-border);
+}
+.wpamb-btn--secondary:hover:not(:disabled) {
+	background: #dcdcde;
+	color: var(--wpamb-dark);
+}
+
+.wpamb-btn--danger {
+	background: var(--wpamb-danger);
+	color: #fff;
+	border-color: var(--wpamb-danger);
+}
+.wpamb-btn--danger:hover:not(:disabled) {
+	background: #b91c1c;
+	color: #fff;
+}
+
+.wpamb-btn--sm {
+	padding: 4px 10px;
+	font-size: .8rem;
+}
+
+.wpamb-btn--lg {
+	padding: 12px 24px;
+	font-size: 1rem;
+}
+
+/* ---- Progress Bar ------------------------------------------ */
+
+.wpamb-progress-wrap {
+	margin-top: 16px;
+}
+
+.wpamb-progress-bar {
+	background: #f0f0f1;
+	border-radius: 20px;
+	height: 12px;
+	overflow: hidden;
+	margin-bottom: 8px;
+}
+
+.wpamb-progress-fill {
+	height: 100%;
+	background: linear-gradient(90deg, var(--wpamb-primary), var(--wpamb-info));
+	border-radius: 20px;
+	width: 0%;
+	transition: width .3s ease;
+}
+
+.wpamb-progress-msg {
+	font-size: .875rem;
+	color: var(--wpamb-gray);
+	margin: 0;
+}
+
+/* ---- Notices ----------------------------------------------- */
+
+.wpamb-notice {
+	padding: 12px 16px;
+	border-radius: var(--wpamb-radius);
+	margin-top: 16px;
+	font-size: .9rem;
+	border-left: 4px solid transparent;
+}
+
+.wpamb-notice--success {
+	background: #edfaee;
+	border-left-color: var(--wpamb-success);
+	color: #1a5c1e;
+}
+
+.wpamb-notice--error {
+	background: #fef0f0;
+	border-left-color: var(--wpamb-danger);
+	color: #7c1c1c;
+}
+
+.wpamb-notice--info {
+	background: #e8f4fb;
+	border-left-color: var(--wpamb-info);
+	color: #0a3d5a;
+}
+
+/* ---- Table ------------------------------------------------- */
+
+.wpamb-table {
+	border-collapse: collapse;
+	width: 100%;
+}
+
+.wpamb-table th {
+	text-align: left;
+	font-weight: 600;
+	padding: 10px 12px;
+	background: var(--wpamb-light);
+	border-bottom: 2px solid var(--wpamb-border);
+}
+
+.wpamb-table td {
+	padding: 10px 12px;
+	border-bottom: 1px solid #f0f0f1;
+	vertical-align: middle;
+}
+
+.wpamb-table tr:last-child td {
+	border-bottom: none;
+}
+
+.wpamb-filename {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.wpamb-filename .dashicons {
+	color: var(--wpamb-gray);
+	flex-shrink: 0;
+}
+
+.wpamb-filename__text {
+	word-break: break-all;
+	font-size: .85rem;
+}
+
+.wpamb-actions {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+/* ---- Badges ------------------------------------------------ */
+
+.wpamb-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 20px;
+	font-size: .75rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: .3px;
+}
+
+.wpamb-badge--success,
+.wpamb-badge--completed { background: #edfaee; color: #1a5c1e; }
+.wpamb-badge--error,
+.wpamb-badge--failed    { background: #fef0f0; color: #7c1c1c; }
+.wpamb-badge--warning   { background: #fef9e7; color: #5a3a00; }
+.wpamb-badge--manual    { background: #e8f4fb; color: #0a3d5a; }
+.wpamb-badge--scheduled { background: #f3e8ff; color: #4c1d95; }
+.wpamb-badge--imported  { background: #fef3e7; color: #5a2d00; }
+
+/* ---- Forms ------------------------------------------------- */
+
+.wpamb-field {
+	margin-bottom: 20px;
+}
+
+.wpamb-label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 8px;
+	color: var(--wpamb-dark);
+}
+
+.wpamb-input {
+	padding: 8px 12px;
+	border: 1px solid var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	font-size: .9rem;
+	min-width: 200px;
+}
+
+.wpamb-input:focus {
+	border-color: var(--wpamb-primary);
+	outline: 2px solid rgba(34,113,177,.2);
+}
+
+.wpamb-input--sm {
+	min-width: 80px;
+	width: 80px;
+}
+
+.wpamb-select {
+	padding: 8px 12px;
+	border: 1px solid var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	font-size: .9rem;
+	background: #fff;
+}
+
+.wpamb-textarea {
+	padding: 8px 12px;
+	border: 1px solid var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	font-size: .875rem;
+	font-family: monospace;
+	resize: vertical;
+}
+
+.wpamb-hint {
+	font-size: .8rem;
+	color: var(--wpamb-gray);
+	margin-top: 4px;
+}
+
+.wpamb-hint--danger {
+	color: var(--wpamb-danger);
+}
+
+/* ---- Checkbox & Radio ------------------------------------- */
+
+.wpamb-checkbox,
+.wpamb-radio {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	cursor: pointer;
+	margin-bottom: 8px;
+	font-size: .9rem;
+}
+
+.wpamb-radio-group {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.wpamb-radio--danger input { accent-color: var(--wpamb-danger); }
+
+/* ---- Toggle Switch ---------------------------------------- */
+
+.wpamb-field--toggle {
+	background: var(--wpamb-light);
+	padding: 16px;
+	border-radius: var(--wpamb-radius);
+	border: 1px solid var(--wpamb-border);
+}
+
+.wpamb-toggle {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	cursor: pointer;
+}
+
+.wpamb-toggle input {
+	position: absolute;
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.wpamb-toggle__slider {
+	position: relative;
+	display: inline-block;
+	width: 44px;
+	height: 24px;
+	background: #c3c4c7;
+	border-radius: 12px;
+	transition: background .2s;
+	flex-shrink: 0;
+}
+
+.wpamb-toggle__slider::after {
+	content: '';
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 18px;
+	height: 18px;
+	background: #fff;
+	border-radius: 50%;
+	transition: transform .2s;
+	box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+
+.wpamb-toggle input:checked + .wpamb-toggle__slider {
+	background: var(--wpamb-success);
+}
+
+.wpamb-toggle input:checked + .wpamb-toggle__slider::after {
+	transform: translateX(20px);
+}
+
+.wpamb-toggle__label {
+	font-weight: 600;
+	font-size: .95rem;
+}
+
+/* ---- Input Group ------------------------------------------ */
+
+.wpamb-input-group {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+/* ---- Next Run Info ---------------------------------------- */
+
+.wpamb-next-run {
+	background: var(--wpamb-light);
+	border: 1px solid var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	padding: 12px 16px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: .9rem;
+}
+
+/* ---- Toolbar ---------------------------------------------- */
+
+.wpamb-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 16px;
+	flex-wrap: wrap;
+}
+
+.wpamb-toolbar__check {
+	margin-bottom: 0;
+}
+
+/* ---- Dropzone --------------------------------------------- */
+
+.wpamb-dropzone {
+	border: 2px dashed var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	padding: 40px;
+	text-align: center;
+	transition: border-color .2s, background .2s;
+	cursor: pointer;
+	position: relative;
+}
+
+.wpamb-dropzone:hover,
+.wpamb-dropzone.drag-over {
+	border-color: var(--wpamb-primary);
+	background: #f0f6fb;
+}
+
+.wpamb-dropzone__icon {
+	font-size: 48px !important;
+	width: 48px !important;
+	height: 48px !important;
+	color: var(--wpamb-gray);
+	display: block;
+	margin: 0 auto 12px;
+}
+
+.wpamb-dropzone__text {
+	font-size: 1rem;
+	margin-bottom: 4px;
+}
+
+.wpamb-dropzone__link {
+	color: var(--wpamb-primary);
+	cursor: pointer;
+	text-decoration: underline;
+}
+
+.wpamb-dropzone__hint {
+	font-size: .8rem;
+	color: var(--wpamb-gray);
+}
+
+.wpamb-dropzone__input {
+	position: absolute;
+	inset: 0;
+	opacity: 0;
+	cursor: pointer;
+}
+
+.wpamb-dropzone__file {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	margin-top: 12px;
+	font-size: .9rem;
+	font-weight: 600;
+}
+
+/* ---- Quick Links ------------------------------------------ */
+
+.wpamb-quick-links {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 12px;
+	margin-top: 20px;
+}
+
+.wpamb-quick-link {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 20px;
+	background: #fff;
+	border: 1px solid var(--wpamb-border);
+	border-radius: var(--wpamb-radius);
+	text-decoration: none;
+	color: var(--wpamb-dark);
+	font-size: .9rem;
+	font-weight: 500;
+	transition: border-color .2s, box-shadow .2s;
+	text-align: center;
+}
+
+.wpamb-quick-link:hover {
+	border-color: var(--wpamb-primary);
+	box-shadow: 0 2px 8px rgba(34,113,177,.15);
+	color: var(--wpamb-primary);
+}
+
+.wpamb-quick-link .dashicons {
+	font-size: 28px;
+	width: 28px;
+	height: 28px;
+}
+
+/* ---- Empty state ------------------------------------------ */
+
+.wpamb-empty {
+	text-align: center;
+	padding: 40px 20px;
+	color: var(--wpamb-gray);
+}
+
+.wpamb-empty__icon {
+	font-size: 48px !important;
+	width: 48px !important;
+	height: 48px !important;
+	display: block;
+	margin: 0 auto 16px;
+	opacity: .4;
+}
+
+/* ---- Info Box --------------------------------------------- */
+
+.wpamb-info-box {
+	background: #f8fbfd;
+	border-color: var(--wpamb-info);
+}
+
+.wpamb-info-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.wpamb-info-list li {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 0;
+	border-bottom: 1px solid #e8f4fb;
+	font-size: .875rem;
+}
+
+.wpamb-info-list li:last-child {
+	border-bottom: none;
+}
+
+.wpamb-info-list .dashicons {
+	color: var(--wpamb-info);
+	flex-shrink: 0;
+	margin-top: 2px;
+}
+
+/* ---- Tools info ------------------------------------------- */
+
+.wpamb-tools div {
+	font-size: .875rem;
+}
+
+.wpamb-tools code {
+	background: var(--wpamb-light);
+	padding: 2px 6px;
+	border-radius: 3px;
+	font-size: .8rem;
+	word-break: break-all;
+}
+
+/* ---- Create Backup box ------------------------------------ */
+
+.wpamb-create-backup {
+	border-left: 4px solid var(--wpamb-primary);
+}
+
+.wpamb-create-options {
+	display: flex;
+	gap: 20px;
+	margin-bottom: 16px;
+}
+
+/* ---- Utilities -------------------------------------------- */
+
+.wpamb-hidden {
+	display: none !important;
+}
+
+/* ---- Responsive ------------------------------------------- */
+
+@media (max-width: 768px) {
+	.wpamb-cards {
+		grid-template-columns: 1fr 1fr;
+	}
+	.wpamb-actions {
+		flex-direction: column;
+	}
+	.wpamb-table {
+		display: block;
+		overflow-x: auto;
+	}
+}
+
+@media (max-width: 480px) {
+	.wpamb-cards {
+		grid-template-columns: 1fr;
+	}
+}
