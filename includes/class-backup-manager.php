@@ -36,6 +36,12 @@ class WPAMB_Backup_Manager {
 	 * @return array|WP_Error  Array con 'filename', 'path', 'size' o WP_Error.
 	 */
 	public function create_backup( $args = array() ) {
+		// Aumentar límites para hosting compartido
+		@ini_set( 'memory_limit', '512M' );
+		@set_time_limit( 600 );
+		@ini_set( 'max_execution_time', '600' );
+		wp_raise_memory_limit( 'admin' );
+
 		$defaults = array(
 			'include_files' => (bool) get_option( 'wpamb_include_files', true ),
 			'include_db'    => (bool) get_option( 'wpamb_include_db',    true ),
@@ -147,8 +153,37 @@ class WPAMB_Backup_Manager {
 	 * Handler AJAX para crear backup.
 	 */
 	public function create_backup_ajax() {
+		// Capturar errores fatales de PHP y devolverlos como JSON
+		register_shutdown_function( function () {
+			$error = error_get_last();
+			if ( $error && in_array( $error['type'], array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ), true ) ) {
+				if ( ! headers_sent() ) {
+					header( 'Content-Type: application/json' );
+				}
+				echo wp_json_encode( array(
+					'success' => false,
+					'data'    => array( 'message' => 'Error PHP: ' . $error['message'] . ' en ' . $error['file'] . ' línea ' . $error['line'] ),
+				) );
+				exit;
+			}
+		} );
+
 		$include_files = isset( $_POST['include_files'] ) ? (bool) $_POST['include_files'] : true;
 		$include_db    = isset( $_POST['include_db'] )    ? (bool) $_POST['include_db']    : true;
+
+		// Verificar que el directorio de backups es escribible
+		if ( ! wp_mkdir_p( WPAMB_BACKUP_DIR ) ) {
+			wp_send_json_error( array(
+				'message' => __( 'No se puede crear el directorio de backups: ', 'wp-ambackup' ) . WPAMB_BACKUP_DIR .
+							 __( ' — Verifica los permisos de la carpeta uploads.', 'wp-ambackup' ),
+			) );
+		}
+
+		if ( ! is_writable( WPAMB_BACKUP_DIR ) ) {
+			wp_send_json_error( array(
+				'message' => __( 'El directorio de backups no tiene permisos de escritura: ', 'wp-ambackup' ) . WPAMB_BACKUP_DIR,
+			) );
+		}
 
 		$result = $this->create_backup( array(
 			'include_files' => $include_files,
