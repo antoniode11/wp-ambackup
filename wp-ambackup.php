@@ -132,6 +132,7 @@ final class WP_AMBackup {
 	private function register_ajax_hooks() {
 		$ajax_actions = array(
 			'wpamb_create_backup',
+			'wpamb_backup_chunk',
 			'wpamb_delete_backup',
 			'wpamb_import_backup',
 			'wpamb_save_schedule',
@@ -157,6 +158,10 @@ final class WP_AMBackup {
 			case 'wpamb_create_backup':
 				check_ajax_referer( 'wpamb_nonce', 'nonce' );
 				$this->backup_manager->create_backup_ajax();
+				break;
+			case 'wpamb_backup_chunk':
+				check_ajax_referer( 'wpamb_nonce', 'nonce' );
+				$this->backup_manager->process_chunk_ajax();
 				break;
 			case 'wpamb_delete_backup':
 				check_ajax_referer( 'wpamb_nonce', 'nonce' );
