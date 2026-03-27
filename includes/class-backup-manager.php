@@ -127,6 +127,21 @@ class WPAMB_Backup_Manager {
 		@ini_set( 'memory_limit', '512M' );
 		@set_time_limit( 300 );
 
+		// Capturar errores fatales PHP y devolverlos como JSON
+		register_shutdown_function( function () {
+			$error = error_get_last();
+			if ( $error && in_array( $error['type'], array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ), true ) ) {
+				if ( ! headers_sent() ) {
+					header( 'Content-Type: application/json' );
+				}
+				echo wp_json_encode( array(
+					'success' => false,
+					'data'    => array( 'message' => 'Error PHP en chunk: ' . $error['message'] . ' (línea ' . $error['line'] . ')' ),
+				) );
+				exit;
+			}
+		} );
+
 		$state = get_option( self::CHUNK_STATE_OPTION );
 		if ( ! $state || empty( $state['zip_path'] ) ) {
 			wp_send_json_error( array( 'message' => __( 'Estado de backup no encontrado. Inicia el backup de nuevo.', 'wp-ambackup' ) ) );
