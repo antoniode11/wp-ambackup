@@ -77,6 +77,7 @@ class WPAMB_Importer {
 
 	/**
 	 * Restaura un backup completo.
+	 * Soporta formato legacy (site-files.zip) y formato multipart_v1 (files_part_NNNN.zip).
 	 *
 	 * @param string $zip_path Ruta al ZIP de backup.
 	 * @param array  $manifest Manifiesto del backup.
@@ -95,7 +96,7 @@ class WPAMB_Importer {
 		$tmp_dir = WPAMB_BACKUP_DIR . 'restore_' . uniqid() . '/';
 		wp_mkdir_p( $tmp_dir );
 
-		// Extraer ZIP
+		// Extraer ZIP maestro (solo contiene: database.sql, manifest.json, files_part_NNNN.zip)
 		if ( ! $zip->extractTo( $tmp_dir ) ) {
 			$zip->close();
 			$this->cleanup_dir( $tmp_dir );
@@ -114,12 +115,36 @@ class WPAMB_Importer {
 			}
 		}
 
-		// 2. Restaurar archivos
-		$files_zip = $tmp_dir . 'site-files.zip';
-		if ( file_exists( $files_zip ) ) {
-			$result = $this->restore_files( $files_zip );
-			if ( is_wp_error( $result ) ) {
-				$errors[] = $result->get_error_message();
+		// 2. Restaurar archivos — formato multipart_v1 o legacy
+		$is_multipart = isset( $manifest['format'] ) && 'multipart_v1' === $manifest['format'];
+
+		if ( $is_multipart ) {
+			// Extraer cada ZIP de parte en orden
+			$parts = ! empty( $manifest['parts'] ) ? $manifest['parts'] : array();
+			if ( empty( $parts ) ) {
+				// Fallback: buscar por glob en caso de manifiesto incompleto
+				$found = glob( $tmp_dir . 'files_part_*.zip' );
+				if ( $found ) {
+					sort( $found );
+					$parts = array_map( 'basename', $found );
+				}
+			}
+			foreach ( $parts as $part_name ) {
+				$part_path = $tmp_dir . $part_name;
+				if ( ! file_exists( $part_path ) ) continue;
+				$result = $this->restore_files( $part_path );
+				if ( is_wp_error( $result ) ) {
+					$errors[] = $part_name . ': ' . $result->get_error_message();
+				}
+			}
+		} else {
+			// Formato legacy: site-files.zip dentro del ZIP maestro
+			$files_zip = $tmp_dir . 'site-files.zip';
+			if ( file_exists( $files_zip ) ) {
+				$result = $this->restore_files( $files_zip );
+				if ( is_wp_error( $result ) ) {
+					$errors[] = $result->get_error_message();
+				}
 			}
 		}
 
