@@ -3,7 +3,7 @@
  * Plugin Name: WP AMBackup
  * Plugin URI:  https://github.com/antoniode11/wp-ambackup
  * Description: Plugin completo de backup para WordPress. Crea, programa, importa y exporta backups de tu sitio web. Similar a All-in-One WP Migration.
- * Version:     1.0.8
+ * Version:     1.0.9
  * Author:      Tu Nombre
  * Author URI:  https://tu-sitio.com
  * License:     GPL-2.0+
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Constantes del plugin
-define( 'WPAMB_VERSION',     '1.0.8' );
+define( 'WPAMB_VERSION',     '1.0.9' );
 define( 'WPAMB_PLUGIN_FILE', __FILE__ );
 define( 'WPAMB_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'WPAMB_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
@@ -132,6 +132,7 @@ final class WP_AMBackup {
 	private function register_ajax_hooks() {
 		$ajax_actions = array(
 			'wpamb_create_backup',
+			'wpamb_scan_files',
 			'wpamb_backup_chunk',
 			'wpamb_delete_backup',
 			'wpamb_import_backup',
@@ -158,6 +159,10 @@ final class WP_AMBackup {
 			case 'wpamb_create_backup':
 				check_ajax_referer( 'wpamb_nonce', 'nonce' );
 				$this->backup_manager->create_backup_ajax();
+				break;
+			case 'wpamb_scan_files':
+				check_ajax_referer( 'wpamb_nonce', 'nonce' );
+				$this->backup_manager->scan_files_ajax();
 				break;
 			case 'wpamb_backup_chunk':
 				check_ajax_referer( 'wpamb_nonce', 'nonce' );

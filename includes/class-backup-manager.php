@@ -1,7 +1,12 @@
 <?php
 /**
- * Gestión de creación, listado y eliminación de backups.
- * Soporta backup por chunks para hosting compartido con timeout de 30s.
+ * Gestión de backups por chunks con tamaño dinámico.
+ * Diseñado para hosting compartido con timeout de 30s.
+ *
+ * Flujo AJAX:
+ *   1. wpamb_create_backup  → exporta BD, guarda estado inicial
+ *   2. wpamb_scan_files     → escanea archivos y guarda lista
+ *   3. wpamb_backup_chunk   → comprime lote de archivos (se repite)
  *
  * @package WP_AMBackup
  */
@@ -12,14 +17,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class WPAMB_Backup_Manager {
 
-	const PROGRESS_OPTION      = 'wpamb_current_progress';
-	const CANCEL_OPTION        = 'wpamb_cancel_flag';
-	const CHUNK_STATE_OPTION   = 'wpamb_chunk_state';
+	const PROGRESS_OPTION    = 'wpamb_current_progress';
+	const CANCEL_OPTION      = 'wpamb_cancel_flag';
+	const CHUNK_STATE_OPTION = 'wpamb_chunk_state';
 
-	/** Chunk inicial. Se ajusta dinámicamente según el tiempo de respuesta. */
-	const CHUNK_SIZE_INITIAL = 100;
-	const CHUNK_TIME_TARGET  = 15; // segundos objetivo por chunk
-	const CHUNK_SIZE_MIN     = 10;
+	const CHUNK_SIZE_INITIAL = 100;   // Archivos en el primer lote
+	const CHUNK_TIME_TARGET  = 15;    // Segundos objetivo por lote
+	const CHUNK_SIZE_MIN     = 5;
 	const CHUNK_SIZE_MAX     = 2000;
 
 	public function __construct() {
@@ -27,23 +31,16 @@ class WPAMB_Backup_Manager {
 	}
 
 	// =========================================================================
-	// AJAX HANDLERS — BACKUP POR CHUNKS
+	// PASO 1 — Exportar BD y preparar estado
 	// =========================================================================
 
-	/**
-	 * PASO 1: Inicia el backup.
-	 * - Valida el directorio
-	 * - Exporta la BD
-	 * - Escanea todos los archivos y guarda la lista
-	 * - Devuelve el total de archivos y chunks necesarios
-	 */
 	public function create_backup_ajax() {
 		@ini_set( 'memory_limit', '512M' );
 		@set_time_limit( 300 );
 		wp_raise_memory_limit( 'admin' );
 
 		if ( ! wp_mkdir_p( WPAMB_BACKUP_DIR ) || ! is_writable( WPAMB_BACKUP_DIR ) ) {
-			wp_send_json_error( array( 'message' => __( 'El directorio de backups no es escribible: ', 'wp-ambackup' ) . WPAMB_BACKUP_DIR ) );
+			wp_send_json_error( array( 'message' => 'El directorio de backups no es escribible: ' . WPAMB_BACKUP_DIR ) );
 		}
 
 		delete_option( self::CANCEL_OPTION );
@@ -52,21 +49,18 @@ class WPAMB_Backup_Manager {
 		$include_db    = ! empty( $_POST['include_db'] );
 		$filename      = $this->generate_filename();
 		$zip_path      = WPAMB_BACKUP_DIR . $filename;
-		$tmp_dir       = WPAMB_BACKUP_DIR . 'tmp_' . sanitize_key( $filename ) . '/';
-
+		$tmp_dir       = WPAMB_BACKUP_DIR . 'tmp_' . uniqid() . '/';
 		wp_mkdir_p( $tmp_dir );
 
-		// --- Exportar base de datos ---
+		// Exportar base de datos
 		if ( $include_db ) {
-			$this->set_progress( 5, __( 'Exportando base de datos…', 'wp-ambackup' ) );
+			$this->set_progress( 5, 'Exportando base de datos…' );
 			$sql_file = $tmp_dir . 'database.sql';
 			$result   = $this->export_database( $sql_file );
 			if ( is_wp_error( $result ) ) {
 				$this->cleanup_tmp( $tmp_dir );
 				wp_send_json_error( array( 'message' => $result->get_error_message() ) );
 			}
-
-			// Añadir SQL al ZIP
 			$result = $this->zip_add_file( $zip_path, $sql_file, 'database.sql', true );
 			if ( is_wp_error( $result ) ) {
 				$this->cleanup_tmp( $tmp_dir );
@@ -75,9 +69,9 @@ class WPAMB_Backup_Manager {
 			@unlink( $sql_file );
 		}
 
-		// --- Si no hay archivos, finalizar aquí ---
+		// Solo BD: finalizar aquí directamente
 		if ( ! $include_files ) {
-			$this->finalize_backup( $zip_path, $tmp_dir, $filename, $include_files, $include_db, 'manual' );
+			$this->finalize_backup( $zip_path, $tmp_dir, $filename, false, $include_db, 'manual' );
 			wp_send_json_success( array(
 				'done'     => true,
 				'filename' => $filename,
@@ -86,86 +80,103 @@ class WPAMB_Backup_Manager {
 			) );
 		}
 
-		// --- Escanear archivos ---
-		$this->set_progress( 15, __( 'Escaneando archivos del sitio…', 'wp-ambackup' ) );
-		$exclude_paths = $this->get_exclude_paths();
-		$file_list     = $this->scan_files( ABSPATH, $exclude_paths );
-		$total         = count( $file_list );
-
-		// Guardar lista en archivo temporal (evita saturar la tabla de opciones)
-		$list_file = $tmp_dir . 'filelist.json';
-		file_put_contents( $list_file, wp_json_encode( $file_list ) );
-
-		// Guardar estado del chunk
+		// Guardar estado — el escaneo de archivos se hace en el siguiente paso
 		update_option( self::CHUNK_STATE_OPTION, array(
 			'filename'      => $filename,
 			'zip_path'      => $zip_path,
 			'tmp_dir'       => $tmp_dir,
-			'list_file'     => $list_file,
+			'list_file'     => $tmp_dir . 'filelist.json',
 			'offset'        => 0,
-			'total'         => $total,
-			'include_files' => $include_files,
+			'total'         => 0,
+			'scanned'       => false,
+			'include_files' => true,
 			'include_db'    => $include_db,
 			'type'          => 'manual',
 		), false );
 
-		$chunks = ceil( $total / self::CHUNK_SIZE );
-		$this->set_progress( 20, sprintf( __( 'Preparado: %d archivos en %d lotes.', 'wp-ambackup' ), $total, $chunks ) );
+		$this->set_progress( 12, 'Base de datos lista. Preparando escaneo de archivos…' );
+
+		wp_send_json_success( array(
+			'done'      => false,
+			'need_scan' => true,
+			'filename'  => $filename,
+		) );
+	}
+
+	// =========================================================================
+	// PASO 2 — Escanear archivos (petición separada para no agotar el timeout)
+	// =========================================================================
+
+	public function scan_files_ajax() {
+		@ini_set( 'memory_limit', '512M' );
+		@set_time_limit( 300 );
+
+		$this->register_fatal_handler( 'escaneo' );
+
+		$state = get_option( self::CHUNK_STATE_OPTION );
+		if ( ! $state ) {
+			wp_send_json_error( array( 'message' => 'Estado no encontrado. Reinicia el backup.' ) );
+		}
+
+		if ( get_option( self::CANCEL_OPTION ) ) {
+			$this->abort_chunk_backup( $state );
+			wp_send_json_error( array( 'message' => 'Backup cancelado.' ) );
+		}
+
+		$this->set_progress( 15, 'Escaneando archivos del sitio…' );
+
+		$file_list = $this->scan_files( ABSPATH, $this->get_exclude_paths() );
+		$total     = count( $file_list );
+
+		file_put_contents( $state['list_file'], wp_json_encode( $file_list ) );
+
+		$state['total']   = $total;
+		$state['scanned'] = true;
+		update_option( self::CHUNK_STATE_OPTION, $state, false );
+
+		$this->set_progress( 20, sprintf( 'Escaneados %d archivos. Iniciando compresión…', $total ) );
 
 		wp_send_json_success( array(
 			'done'        => false,
 			'chunking'    => true,
 			'total_files' => $total,
-			'total_chunks'=> $chunks,
-			'chunk_size'  => self::CHUNK_SIZE,
-			'filename'    => $filename,
+			'chunk_size'  => self::CHUNK_SIZE_INITIAL,
+			'filename'    => $state['filename'],
 		) );
 	}
 
-	/**
-	 * PASO 2: Procesa un chunk de archivos con tamaño dinámico.
-	 * Mide el tiempo real de cada lote y ajusta el siguiente automáticamente.
-	 */
+	// =========================================================================
+	// PASO 3 — Comprimir lote de archivos (chunk dinámico)
+	// =========================================================================
+
 	public function process_chunk_ajax() {
 		@ini_set( 'memory_limit', '512M' );
 		@set_time_limit( 300 );
 
-		register_shutdown_function( function () {
-			$error = error_get_last();
-			if ( $error && in_array( $error['type'], array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ), true ) ) {
-				if ( ! headers_sent() ) {
-					header( 'Content-Type: application/json' );
-				}
-				echo wp_json_encode( array(
-					'success' => false,
-					'data'    => array( 'message' => 'Error PHP en chunk: ' . $error['message'] . ' (línea ' . $error['line'] . ')' ),
-				) );
-				exit;
-			}
-		} );
+		$this->register_fatal_handler( 'compresión' );
 
 		$state = get_option( self::CHUNK_STATE_OPTION );
 		if ( ! $state || empty( $state['zip_path'] ) ) {
-			wp_send_json_error( array( 'message' => __( 'Estado de backup no encontrado. Inicia el backup de nuevo.', 'wp-ambackup' ) ) );
+			wp_send_json_error( array( 'message' => 'Estado no encontrado. Reinicia el backup.' ) );
 		}
 
 		if ( get_option( self::CANCEL_OPTION ) ) {
 			$this->abort_chunk_backup( $state );
-			wp_send_json_error( array( 'message' => __( 'Backup cancelado.', 'wp-ambackup' ) ) );
+			wp_send_json_error( array( 'message' => 'Backup cancelado.' ) );
 		}
 
 		$offset     = (int) $state['offset'];
 		$total      = (int) $state['total'];
 		$zip_path   = $state['zip_path'];
-		$list_file  = $state['list_file'];
-		$tmp_dir    = $state['tmp_dir'];
-		// Tamaño de chunk enviado por JS (ajustado dinámicamente)
-		$chunk_size = isset( $_POST['chunk_size'] ) ? max( self::CHUNK_SIZE_MIN, min( self::CHUNK_SIZE_MAX, (int) $_POST['chunk_size'] ) ) : self::CHUNK_SIZE_INITIAL;
+		$chunk_size = isset( $_POST['chunk_size'] )
+			? max( self::CHUNK_SIZE_MIN, min( self::CHUNK_SIZE_MAX, (int) $_POST['chunk_size'] ) )
+			: self::CHUNK_SIZE_INITIAL;
 
-		$file_list = json_decode( file_get_contents( $list_file ), true );
+		// Leer lista de archivos
+		$file_list = json_decode( file_get_contents( $state['list_file'] ), true );
 		if ( ! is_array( $file_list ) ) {
 			$this->abort_chunk_backup( $state );
-			wp_send_json_error( array( 'message' => __( 'Lista de archivos corrupta.', 'wp-ambackup' ) ) );
+			wp_send_json_error( array( 'message' => 'Lista de archivos corrupta.' ) );
 		}
 
 		$chunk = array_slice( $file_list, $offset, $chunk_size );
@@ -175,65 +186,57 @@ class WPAMB_Backup_Manager {
 		$mode = file_exists( $zip_path ) ? ZipArchive::CREATE : ( ZipArchive::CREATE | ZipArchive::OVERWRITE );
 		if ( true !== $zip->open( $zip_path, $mode ) ) {
 			$this->abort_chunk_backup( $state );
-			wp_send_json_error( array( 'message' => __( 'No se pudo abrir el ZIP para escritura.', 'wp-ambackup' ) ) );
+			wp_send_json_error( array( 'message' => 'No se pudo abrir el ZIP para escritura.' ) );
 		}
 
-		$abspath   = rtrim( ABSPATH, '/\\' );
-		$skipped   = 0;
-		$processed = 0;
+		$abspath    = rtrim( ABSPATH, '/\\' );
+		$processed  = 0;
 		$time_start = microtime( true );
 
 		foreach ( $chunk as $file_path ) {
-			if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-				$skipped++; continue;
-			}
-			if ( @filesize( $file_path ) > 500 * 1024 * 1024 ) {
-				$skipped++; continue;
-			}
+			if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) continue;
+			if ( @filesize( $file_path ) > 500 * 1024 * 1024 ) continue;
 			try {
 				$relative = ltrim( str_replace( '\\', '/', substr( $file_path, strlen( $abspath ) ) ), '/' );
-				if ( preg_match( '/[\x00-\x1F\x7F]/', $relative ) ) {
-					$skipped++; continue;
-				}
+				if ( preg_match( '/[\x00-\x1F\x7F]/', $relative ) ) continue;
 				$zip->addFile( $file_path, 'files/' . $relative );
 				$processed++;
 			} catch ( Exception $e ) {
-				$skipped++; continue;
+				continue;
 			}
 		}
 
-		// Medir tiempo ANTES del close (el close puede tardar mucho en ZIPs grandes)
-		$time_before_close = microtime( true );
+		$time_add   = microtime( true ) - $time_start;
 		$zip->close();
 		$time_total = microtime( true ) - $time_start;
-		$time_close = microtime( true ) - $time_before_close;
 
-		// --- Calcular siguiente chunk_size dinámicamente ---
-		// Objetivo: que cada chunk dure self::CHUNK_TIME_TARGET segundos
-		// Si tardó menos → aumentar; si tardó más → reducir
+		// Calcular chunk_size óptimo para el siguiente lote
 		if ( $time_total > 0 && $processed > 0 ) {
-			$ratio          = self::CHUNK_TIME_TARGET / max( $time_total, 1 );
-			$next_chunk     = (int) round( $chunk_size * $ratio );
-			// Aplicar límites y evitar cambios bruscos (máx ×2 o ÷2 por lote)
-			$next_chunk     = max( self::CHUNK_SIZE_MIN, min( self::CHUNK_SIZE_MAX, $next_chunk ) );
-			$next_chunk     = max( (int)( $chunk_size / 2 ), min( $chunk_size * 2, $next_chunk ) );
+			$ratio      = self::CHUNK_TIME_TARGET / max( $time_total, 0.5 );
+			$next_chunk = (int) round( $chunk_size * $ratio );
+			$next_chunk = max( self::CHUNK_SIZE_MIN, min( self::CHUNK_SIZE_MAX, $next_chunk ) );
+			// Limitar cambio brusco: máx ×2 o ÷2 por iteración
+			$next_chunk = max( (int)( $chunk_size / 2 ), min( $chunk_size * 2, $next_chunk ) );
 		} else {
 			$next_chunk = $chunk_size;
 		}
 
 		$new_offset = $offset + count( $chunk );
-		$percent    = 20 + intval( ( $new_offset / max( $total, 1 ) ) * 70 );
+		$percent    = 20 + intval( ( $new_offset / max( $total, 1 ) ) * 75 );
 
 		$this->set_progress(
-			min( $percent, 90 ),
-			sprintf( __( 'Comprimiendo archivos… %d/%d (lote: %d archivos, %.1fs)', 'wp-ambackup' ), $new_offset, $total, $processed, $time_total )
+			min( $percent, 94 ),
+			sprintf( 'Comprimiendo… %d/%d | Lote: %d archivos | %.1fs', $new_offset, $total, $processed, $time_total )
 		);
 
 		$state['offset'] = $new_offset;
 		update_option( self::CHUNK_STATE_OPTION, $state, false );
 
 		if ( $new_offset >= $total ) {
-			$this->finalize_backup( $zip_path, $tmp_dir, $state['filename'], $state['include_files'], $state['include_db'], $state['type'] );
+			$this->finalize_backup(
+				$zip_path, $state['tmp_dir'], $state['filename'],
+				$state['include_files'], $state['include_db'], $state['type']
+			);
 			wp_send_json_success( array(
 				'done'     => true,
 				'filename' => $state['filename'],
@@ -243,23 +246,22 @@ class WPAMB_Backup_Manager {
 		}
 
 		wp_send_json_success( array(
-			'done'           => false,
-			'offset'         => $new_offset,
-			'total'          => $total,
-			'percent'        => min( $percent, 90 ),
-			'next_chunk_size'=> $next_chunk,
-			'time_taken'     => round( $time_total, 2 ),
-			'time_close'     => round( $time_close, 2 ),
+			'done'            => false,
+			'offset'          => $new_offset,
+			'total'           => $total,
+			'percent'         => min( $percent, 94 ),
+			'next_chunk_size' => $next_chunk,
+			'time_taken'      => round( $time_total, 2 ),
 		) );
 	}
 
-	/**
-	 * Finaliza el backup: añade manifiesto, registra en BD, rota y notifica.
-	 */
-	private function finalize_backup( $zip_path, $tmp_dir, $filename, $include_files, $include_db, $type ) {
-		$this->set_progress( 95, __( 'Finalizando backup…', 'wp-ambackup' ) );
+	// =========================================================================
+	// FINALIZAR BACKUP
+	// =========================================================================
 
-		// Añadir manifiesto al ZIP
+	private function finalize_backup( $zip_path, $tmp_dir, $filename, $include_files, $include_db, $type ) {
+		$this->set_progress( 96, 'Finalizando backup…' );
+
 		$manifest = array(
 			'plugin_version' => WPAMB_VERSION,
 			'wp_version'     => get_bloginfo( 'version' ),
@@ -274,7 +276,6 @@ class WPAMB_Backup_Manager {
 		file_put_contents( $manifest_file, wp_json_encode( $manifest, JSON_PRETTY_PRINT ) );
 		$this->zip_add_file( $zip_path, $manifest_file, 'manifest.json' );
 
-		// Limpiar tmp y estado
 		$this->cleanup_tmp( $tmp_dir );
 		delete_option( self::CHUNK_STATE_OPTION );
 
@@ -282,25 +283,32 @@ class WPAMB_Backup_Manager {
 		$this->log_backup( $filename, $size, $type, 'completed' );
 		$this->rotate_backups();
 		$this->maybe_notify( 'success', $filename, $size );
-		$this->set_progress( 100, __( 'Backup completado.', 'wp-ambackup' ) );
+		$this->set_progress( 100, 'Backup completado.' );
 	}
 
-	/**
-	 * Aborta un backup por chunks en curso.
-	 */
 	private function abort_chunk_backup( $state ) {
-		if ( ! empty( $state['tmp_dir'] ) ) {
-			$this->cleanup_tmp( $state['tmp_dir'] );
-		}
-		if ( ! empty( $state['zip_path'] ) && file_exists( $state['zip_path'] ) ) {
-			@unlink( $state['zip_path'] );
-		}
+		if ( ! empty( $state['tmp_dir'] ) ) $this->cleanup_tmp( $state['tmp_dir'] );
+		if ( ! empty( $state['zip_path'] ) && file_exists( $state['zip_path'] ) ) @unlink( $state['zip_path'] );
 		delete_option( self::CHUNK_STATE_OPTION );
 		$this->set_progress( 0, '' );
 	}
 
+	private function register_fatal_handler( $step = '' ) {
+		register_shutdown_function( function () use ( $step ) {
+			$error = error_get_last();
+			if ( $error && in_array( $error['type'], array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ), true ) ) {
+				if ( ! headers_sent() ) header( 'Content-Type: application/json' );
+				echo wp_json_encode( array(
+					'success' => false,
+					'data'    => array( 'message' => 'Error PHP en ' . $step . ': ' . $error['message'] . ' (línea ' . $error['line'] . ')' ),
+				) );
+				exit;
+			}
+		} );
+	}
+
 	// =========================================================================
-	// BACKUP PROGRAMADO (WP-Cron — sin límite de tiempo AJAX)
+	// BACKUP PROGRAMADO (WP-Cron)
 	// =========================================================================
 
 	public function run_scheduled_backup() {
@@ -312,9 +320,8 @@ class WPAMB_Backup_Manager {
 		$tmp_dir   = WPAMB_BACKUP_DIR . 'tmp_cron_' . uniqid() . '/';
 		wp_mkdir_p( $tmp_dir );
 
-		$include_db    = (bool) get_option( 'wpamb_include_db', true );
+		$include_db    = (bool) get_option( 'wpamb_include_db',    true );
 		$include_files = (bool) get_option( 'wpamb_include_files', true );
-		$exclude_paths = $this->get_exclude_paths();
 
 		try {
 			if ( $include_db ) {
@@ -324,25 +331,21 @@ class WPAMB_Backup_Manager {
 				$this->zip_add_file( $zip_path, $sql_file, 'database.sql', true );
 				@unlink( $sql_file );
 			}
-
 			if ( $include_files ) {
-				$file_list = $this->scan_files( ABSPATH, $exclude_paths );
+				$file_list = $this->scan_files( ABSPATH, $this->get_exclude_paths() );
 				$abspath   = rtrim( ABSPATH, '/\\' );
-				$chunks    = array_chunk( $file_list, self::CHUNK_SIZE );
-				foreach ( $chunks as $chunk ) {
+				foreach ( array_chunk( $file_list, 500 ) as $chunk ) {
 					$zip = new ZipArchive();
 					$zip->open( $zip_path, ZipArchive::CREATE );
-					foreach ( $chunk as $file_path ) {
-						if ( ! file_exists( $file_path ) ) continue;
-						$relative = ltrim( str_replace( '\\', '/', substr( $file_path, strlen( $abspath ) ) ), '/' );
-						$zip->addFile( $file_path, 'files/' . $relative );
+					foreach ( $chunk as $fp ) {
+						if ( ! file_exists( $fp ) ) continue;
+						$rel = ltrim( str_replace( '\\', '/', substr( $fp, strlen( $abspath ) ) ), '/' );
+						$zip->addFile( $fp, 'files/' . $rel );
 					}
 					$zip->close();
 				}
 			}
-
 			$this->finalize_backup( $zip_path, $tmp_dir, $filename, $include_files, $include_db, 'scheduled' );
-
 		} catch ( Exception $e ) {
 			$this->cleanup_tmp( $tmp_dir );
 			if ( file_exists( $zip_path ) ) @unlink( $zip_path );
@@ -354,65 +357,41 @@ class WPAMB_Backup_Manager {
 	}
 
 	// =========================================================================
-	// EXPORTAR BASE DE DATOS
+	// BASE DE DATOS
 	// =========================================================================
 
 	private function export_database( $output_file ) {
 		global $wpdb;
-
 		$tables = $wpdb->get_col( 'SHOW TABLES' );
-		if ( empty( $tables ) ) {
-			return new WP_Error( 'no_tables', __( 'No se encontraron tablas en la BD.', 'wp-ambackup' ) );
-		}
+		if ( empty( $tables ) ) return new WP_Error( 'no_tables', 'No se encontraron tablas.' );
 
 		$handle = fopen( $output_file, 'w' );
-		if ( ! $handle ) {
-			return new WP_Error( 'file_error', __( 'No se pudo crear el archivo SQL.', 'wp-ambackup' ) );
-		}
+		if ( ! $handle ) return new WP_Error( 'file_error', 'No se pudo crear el archivo SQL.' );
 
-		fwrite( $handle, "-- WP AMBackup SQL Dump\n" );
-		fwrite( $handle, "-- Version: " . WPAMB_VERSION . "\n" );
-		fwrite( $handle, "-- Generado: " . current_time( 'mysql' ) . "\n" );
-		fwrite( $handle, "-- Sitio: " . get_site_url() . "\n\n" );
-		fwrite( $handle, "SET NAMES utf8mb4;\n" );
-		fwrite( $handle, "SET FOREIGN_KEY_CHECKS=0;\n\n" );
+		fwrite( $handle, "-- WP AMBackup SQL Dump\n-- Version: " . WPAMB_VERSION . "\n-- " . current_time( 'mysql' ) . "\n\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
 
 		$total = count( $tables );
 		$done  = 0;
-
 		foreach ( $tables as $table ) {
 			$create = $wpdb->get_row( "SHOW CREATE TABLE `{$table}`", ARRAY_N );
 			if ( $create ) {
-				fwrite( $handle, "\n-- Tabla: `{$table}`\n" );
-				fwrite( $handle, "DROP TABLE IF EXISTS `{$table}`;\n" );
-				fwrite( $handle, $create[1] . ";\n\n" );
+				fwrite( $handle, "\nDROP TABLE IF EXISTS `{$table}`;\n" . $create[1] . ";\n\n" );
 			}
-
 			$offset = 0;
-			$batch  = 500;
 			do {
-				$rows = $wpdb->get_results(
-					$wpdb->prepare( "SELECT * FROM `{$table}` LIMIT %d OFFSET %d", $batch, $offset ),
-					ARRAY_A
-				);
+				$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `{$table}` LIMIT 500 OFFSET %d", $offset ), ARRAY_A );
 				if ( $rows ) {
 					foreach ( $rows as $row ) {
-						$values = array_map( function( $val ) {
-							return null === $val ? 'NULL' : "'" . addslashes( $val ) . "'";
-						}, $row );
-						fwrite( $handle, "INSERT INTO `{$table}` VALUES (" . implode( ',', $values ) . ");\n" );
+						$vals = array_map( function( $v ) { return null === $v ? 'NULL' : "'" . addslashes( $v ) . "'"; }, $row );
+						fwrite( $handle, "INSERT INTO `{$table}` VALUES (" . implode( ',', $vals ) . ");\n" );
 					}
-					$offset += $batch;
+					$offset += 500;
 				}
-			} while ( $rows && count( $rows ) === $batch );
+			} while ( $rows && count( $rows ) === 500 );
 
 			$done++;
-			$this->set_progress(
-				5 + intval( ( $done / $total ) * 10 ),
-				sprintf( __( 'Exportando tabla %s (%d/%d)…', 'wp-ambackup' ), $table, $done, $total )
-			);
+			$this->set_progress( 5 + intval( $done / $total * 7 ), "Exportando tabla {$table} ({$done}/{$total})…" );
 		}
-
 		fwrite( $handle, "\nSET FOREIGN_KEY_CHECKS=1;\n" );
 		fclose( $handle );
 		return true;
@@ -422,77 +401,50 @@ class WPAMB_Backup_Manager {
 	// ESCANEO DE ARCHIVOS
 	// =========================================================================
 
-	/**
-	 * Devuelve un array plano con las rutas absolutas de todos los archivos.
-	 */
 	private function scan_files( $source_dir, $exclude_paths = array() ) {
 		$source_dir = rtrim( $source_dir, '/\\' );
 		$file_list  = array();
-
 		try {
-			$iterator = new RecursiveIteratorIterator(
+			$it = new RecursiveIteratorIterator(
 				new RecursiveDirectoryIterator( $source_dir, RecursiveDirectoryIterator::SKIP_DOTS ),
 				RecursiveIteratorIterator::SELF_FIRST
 			);
-
-			foreach ( $iterator as $file ) {
+			foreach ( $it as $file ) {
 				if ( ! $file->isFile() ) continue;
-
-				$file_path = $file->getRealPath();
-				if ( ! $file_path ) continue;
-
+				$fp = $file->getRealPath();
+				if ( ! $fp ) continue;
 				$excluded = false;
 				foreach ( $exclude_paths as $ex ) {
-					if ( 0 === strpos( $file_path, rtrim( $ex, '/\\' ) ) ) {
-						$excluded = true;
-						break;
-					}
+					if ( 0 === strpos( $fp, rtrim( $ex, '/\\' ) ) ) { $excluded = true; break; }
 				}
-				if ( ! $excluded ) {
-					$file_list[] = $file_path;
-				}
+				if ( ! $excluded ) $file_list[] = $fp;
 			}
-		} catch ( Exception $e ) {
-			// Continuar aunque algún directorio no sea accesible
-		}
-
+		} catch ( Exception $e ) {}
 		return $file_list;
 	}
 
-	/**
-	 * Construye el array de rutas a excluir siempre.
-	 */
 	private function get_exclude_paths() {
-		$abspath        = rtrim( ABSPATH, '/\\' );
-		$always_exclude = array(
-			rtrim( WPAMB_BACKUP_DIR, '/\\' ),
-			$abspath . '/wp-content/cache',
-			$abspath . '/wp-content/upgrade',
-			$abspath . '/wp-content/wflogs',
-		);
-		$user_exclude = (array) get_option( 'wpamb_exclude_paths', array() );
-		return array_filter( array_merge( $always_exclude, $user_exclude ) );
+		$abspath = rtrim( ABSPATH, '/\\' );
+		return array_filter( array_merge(
+			array(
+				rtrim( WPAMB_BACKUP_DIR, '/\\' ),
+				$abspath . '/wp-content/cache',
+				$abspath . '/wp-content/upgrade',
+				$abspath . '/wp-content/wflogs',
+			),
+			(array) get_option( 'wpamb_exclude_paths', array() )
+		) );
 	}
 
 	// =========================================================================
-	// ZIP HELPERS
+	// ZIP HELPER
 	// =========================================================================
 
-	/**
-	 * Abre el ZIP (o lo crea) y añade un único archivo.
-	 *
-	 * @param string $zip_path   Ruta al ZIP de destino.
-	 * @param string $file_path  Ruta al archivo a añadir.
-	 * @param string $entry_name Nombre dentro del ZIP.
-	 * @param bool   $overwrite  Si true, crea el ZIP desde cero.
-	 * @return true|WP_Error
-	 */
 	private function zip_add_file( $zip_path, $file_path, $entry_name, $overwrite = false ) {
 		$zip  = new ZipArchive();
 		$mode = $overwrite ? ( ZipArchive::CREATE | ZipArchive::OVERWRITE ) : ZipArchive::CREATE;
-
 		if ( true !== $zip->open( $zip_path, $mode ) ) {
-			return new WP_Error( 'zip_open', __( 'No se pudo abrir el ZIP.', 'wp-ambackup' ) );
+			return new WP_Error( 'zip_open', 'No se pudo abrir el ZIP.' );
 		}
 		$zip->addFile( $file_path, $entry_name );
 		$zip->close();
@@ -505,13 +457,11 @@ class WPAMB_Backup_Manager {
 
 	public function get_backups() {
 		global $wpdb;
-		$table = $wpdb->prefix . 'ambackup_log';
-		$rows  = $wpdb->get_results( "SELECT * FROM {$table} ORDER BY created_at DESC", ARRAY_A );
-
-		$backups = array();
+		$rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}ambackup_log ORDER BY created_at DESC", ARRAY_A );
+		$out  = array();
 		foreach ( (array) $rows as $row ) {
-			$path      = WPAMB_BACKUP_DIR . $row['filename'];
-			$backups[] = array(
+			$path  = WPAMB_BACKUP_DIR . $row['filename'];
+			$out[] = array(
 				'id'           => $row['id'],
 				'filename'     => $row['filename'],
 				'size'         => (int) $row['size'],
@@ -523,32 +473,26 @@ class WPAMB_Backup_Manager {
 				'download_url' => $this->get_download_url( $row['filename'] ),
 			);
 		}
-		return $backups;
+		return $out;
 	}
 
 	public function delete_backup( $id ) {
 		global $wpdb;
-		$table = $wpdb->prefix . 'ambackup_log';
-		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", $id ), ARRAY_A );
-		if ( ! $row ) {
-			return new WP_Error( 'not_found', __( 'Backup no encontrado.', 'wp-ambackup' ) );
-		}
+		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}ambackup_log WHERE id = %d", $id ), ARRAY_A );
+		if ( ! $row ) return new WP_Error( 'not_found', 'Backup no encontrado.' );
 		$path = WPAMB_BACKUP_DIR . $row['filename'];
 		if ( file_exists( $path ) ) @unlink( $path );
-		$wpdb->delete( $table, array( 'id' => $id ), array( '%d' ) );
+		$wpdb->delete( $wpdb->prefix . 'ambackup_log', array( 'id' => $id ), array( '%d' ) );
 		return true;
 	}
 
 	public function delete_backup_ajax() {
-		$id = isset( $_POST['backup_id'] ) ? absint( $_POST['backup_id'] ) : 0;
-		if ( ! $id ) {
-			wp_send_json_error( array( 'message' => __( 'ID de backup inválido.', 'wp-ambackup' ) ) );
-		}
+		$id = absint( $_POST['backup_id'] ?? 0 );
+		if ( ! $id ) wp_send_json_error( array( 'message' => 'ID inválido.' ) );
 		$result = $this->delete_backup( $id );
-		if ( is_wp_error( $result ) ) {
-			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
-		}
-		wp_send_json_success( array( 'message' => __( 'Backup eliminado.', 'wp-ambackup' ) ) );
+		is_wp_error( $result )
+			? wp_send_json_error( array( 'message' => $result->get_error_message() ) )
+			: wp_send_json_success( array( 'message' => 'Backup eliminado.' ) );
 	}
 
 	// =========================================================================
@@ -567,27 +511,17 @@ class WPAMB_Backup_Manager {
 	}
 
 	public function handle_download() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( __( 'Sin permisos.', 'wp-ambackup' ) );
-		}
-		$filename = isset( $_GET['wpamb_download'] ) ? sanitize_file_name( rawurldecode( $_GET['wpamb_download'] ) ) : '';
-		if ( ! $filename || ! wp_verify_nonce( $_GET['nonce'] ?? '', 'wpamb_download_' . $filename ) ) {
-			wp_die( __( 'Solicitud inválida.', 'wp-ambackup' ) );
-		}
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( 'Sin permisos.' );
+		$filename = sanitize_file_name( rawurldecode( $_GET['wpamb_download'] ?? '' ) );
+		if ( ! $filename || ! wp_verify_nonce( $_GET['nonce'] ?? '', 'wpamb_download_' . $filename ) ) wp_die( 'Solicitud inválida.' );
 		$path = WPAMB_BACKUP_DIR . $filename;
-		if ( ! file_exists( $path ) || ! is_file( $path ) ) {
-			wp_die( __( 'Archivo no encontrado.', 'wp-ambackup' ) );
-		}
+		if ( ! file_exists( $path ) ) wp_die( 'Archivo no encontrado.' );
 		nocache_headers();
 		header( 'Content-Type: application/zip' );
 		header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
 		header( 'Content-Length: ' . filesize( $path ) );
-		header( 'Content-Transfer-Encoding: binary' );
 		$fp = fopen( $path, 'rb' );
-		while ( ! feof( $fp ) ) {
-			echo fread( $fp, 65536 );
-			flush();
-		}
+		while ( ! feof( $fp ) ) { echo fread( $fp, 65536 ); flush(); }
 		fclose( $fp );
 		exit;
 	}
@@ -597,25 +531,18 @@ class WPAMB_Backup_Manager {
 	// =========================================================================
 
 	public function set_progress( $percent, $message = '' ) {
-		update_option( self::PROGRESS_OPTION, array(
-			'percent' => (int) $percent,
-			'message' => $message,
-			'time'    => time(),
-		), false );
+		update_option( self::PROGRESS_OPTION, array( 'percent' => (int) $percent, 'message' => $message, 'time' => time() ), false );
 	}
 
 	public function get_progress_ajax() {
-		$progress = get_option( self::PROGRESS_OPTION, array( 'percent' => 0, 'message' => '' ) );
-		wp_send_json_success( $progress );
+		wp_send_json_success( get_option( self::PROGRESS_OPTION, array( 'percent' => 0, 'message' => '' ) ) );
 	}
 
 	public function cancel_backup_ajax() {
 		update_option( self::CANCEL_OPTION, true, false );
 		$state = get_option( self::CHUNK_STATE_OPTION );
-		if ( $state ) {
-			$this->abort_chunk_backup( $state );
-		}
-		wp_send_json_success( array( 'message' => __( 'Backup cancelado.', 'wp-ambackup' ) ) );
+		if ( $state ) $this->abort_chunk_backup( $state );
+		wp_send_json_success( array( 'message' => 'Backup cancelado.' ) );
 	}
 
 	// =========================================================================
@@ -623,35 +550,23 @@ class WPAMB_Backup_Manager {
 	// =========================================================================
 
 	private function generate_filename() {
-		$date = current_time( 'Y-m-d_H-i-s' );
-		$site = substr( sanitize_title( get_bloginfo( 'name' ) ), 0, 30 );
-		return "backup_{$site}_{$date}.zip";
+		return 'backup_' . substr( sanitize_title( get_bloginfo( 'name' ) ), 0, 30 ) . '_' . current_time( 'Y-m-d_H-i-s' ) . '.zip';
 	}
 
 	private function cleanup_tmp( $dir ) {
 		if ( ! is_dir( $dir ) ) return;
-		$files = new RecursiveIteratorIterator(
+		$it = new RecursiveIteratorIterator(
 			new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ),
 			RecursiveIteratorIterator::CHILD_FIRST
 		);
-		foreach ( $files as $file ) {
-			$file->isDir() ? @rmdir( $file->getRealPath() ) : @unlink( $file->getRealPath() );
-		}
+		foreach ( $it as $f ) { $f->isDir() ? @rmdir( $f->getRealPath() ) : @unlink( $f->getRealPath() ); }
 		@rmdir( $dir );
 	}
 
 	private function log_backup( $filename, $size, $type, $status, $note = '' ) {
 		global $wpdb;
-		$wpdb->insert(
-			$wpdb->prefix . 'ambackup_log',
-			array(
-				'filename'   => $filename,
-				'size'       => $size,
-				'type'       => $type,
-				'status'     => $status,
-				'created_at' => current_time( 'mysql' ),
-				'note'       => $note,
-			),
+		$wpdb->insert( $wpdb->prefix . 'ambackup_log',
+			array( 'filename' => $filename, 'size' => $size, 'type' => $type, 'status' => $status, 'created_at' => current_time( 'mysql' ), 'note' => $note ),
 			array( '%s', '%d', '%s', '%s', '%s', '%s' )
 		);
 	}
@@ -661,15 +576,10 @@ class WPAMB_Backup_Manager {
 		if ( $max <= 0 ) return;
 		global $wpdb;
 		$table = $wpdb->prefix . 'ambackup_log';
-		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table} WHERE status = 'completed'" );
+		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table} WHERE status='completed'" );
 		if ( $total <= $max ) return;
-		$rows = $wpdb->get_results(
-			$wpdb->prepare( "SELECT id FROM {$table} WHERE status = 'completed' ORDER BY created_at ASC LIMIT %d", $total - $max ),
-			ARRAY_A
-		);
-		foreach ( (array) $rows as $row ) {
-			$this->delete_backup( $row['id'] );
-		}
+		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id FROM {$table} WHERE status='completed' ORDER BY created_at ASC LIMIT %d", $total - $max ), ARRAY_A );
+		foreach ( (array) $rows as $r ) $this->delete_backup( $r['id'] );
 	}
 
 	private function maybe_notify( $event, $filename, $size, $error = '' ) {
@@ -677,14 +587,12 @@ class WPAMB_Backup_Manager {
 		if ( ! $email ) return;
 		if ( 'success' === $event && ! get_option( 'wpamb_notify_on_success' ) ) return;
 		if ( 'failure' === $event && ! get_option( 'wpamb_notify_on_failure' ) ) return;
-		$site    = get_bloginfo( 'name' );
-		$subject = 'success' === $event
-			? sprintf( '[%s] Backup completado: %s', $site, $filename )
-			: sprintf( '[%s] ERROR en backup: %s', $site, $filename );
+		$site = get_bloginfo( 'name' );
+		$subj = 'success' === $event ? "[{$site}] Backup completado: {$filename}" : "[{$site}] ERROR en backup: {$filename}";
 		$body = 'success' === $event
-			? sprintf( "Backup completado.\n\nArchivo: %s\nTamaño: %s\nFecha: %s", $filename, size_format( $size ), current_time( 'mysql' ) )
-			: sprintf( "El backup ha fallado.\n\nArchivo: %s\nError: %s\nFecha: %s", $filename, $error, current_time( 'mysql' ) );
-		wp_mail( $email, $subject, $body );
+			? "Backup completado.\nArchivo: {$filename}\nTamaño: " . size_format( $size ) . "\nFecha: " . current_time( 'mysql' )
+			: "Backup fallido.\nArchivo: {$filename}\nError: {$error}\nFecha: " . current_time( 'mysql' );
+		wp_mail( $email, $subj, $body );
 	}
 }
 

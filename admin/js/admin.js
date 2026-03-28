@@ -42,15 +42,34 @@
 			if ( res.data.done ) {
 				// Solo BD → completado en un paso
 				backupCompleted( res.data );
-			} else if ( res.data.chunking ) {
-				// Archivos → procesar chunks con tamaño inicial
-				var initialChunk = res.data.chunk_size || 100;
-				updateProgress( 20, 'Preparado: ' + res.data.total_files + ' archivos. Ajustando lote dinámicamente…' );
-				processNextChunk( res.data.filename, 0, res.data.total_files, initialChunk );
+			} else if ( res.data.need_scan ) {
+				// Escanear archivos en paso separado
+				updateProgress( 12, 'Base de datos lista. Escaneando archivos…' );
+				scanFiles();
 			}
 		})
 		.fail(function () {
 			backupFailed( 'Error de conexión al iniciar el backup.' );
+		});
+	}
+
+	/**
+	 * Paso intermedio: escanea archivos en petición separada.
+	 */
+	function scanFiles() {
+		if ( ! backupRunning ) return;
+
+		$.post( wpamb.ajax_url, { action: 'wpamb_scan_files', nonce: wpamb.nonce } )
+		.done(function ( res ) {
+			if ( ! res.success ) {
+				backupFailed( res.data ? res.data.message : 'Error al escanear archivos.' );
+				return;
+			}
+			updateProgress( 20, 'Escaneados ' + res.data.total_files + ' archivos. Iniciando compresión…' );
+			processNextChunk( res.data.filename, 0, res.data.total_files, res.data.chunk_size || 100 );
+		})
+		.fail(function () {
+			backupFailed( 'Error de conexión al escanear archivos.' );
 		});
 	}
 
