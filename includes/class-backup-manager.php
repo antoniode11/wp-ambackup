@@ -27,11 +27,13 @@ class WPAMB_Backup_Manager {
 	const CANCEL_OPTION      = 'wpamb_cancel_flag';
 	const CHUNK_STATE_OPTION = 'wpamb_chunk_state';
 
-	const CHUNK_SIZE_INITIAL = 1000;  // Archivos por parte — ajuste dinámico posterior
-	const CHUNK_TIME_TARGET  = 12;    // Segundos objetivo por chunk
-	const CHUNK_SIZE_MIN     = 10;
-	const CHUNK_SIZE_MAX     = 10000;
-	const CHUNK_BYTES_MAX    = 64 * 1024 * 1024; // 64 MB máx de datos por chunk
+	const CHUNK_SIZE_INITIAL    = 1000;  // Archivos por parte — ajuste dinámico posterior
+	const CHUNK_TIME_TARGET     = 12;    // Segundos objetivo por chunk de compresión
+	const CHUNK_SIZE_MIN        = 10;
+	const CHUNK_SIZE_MAX        = 10000;
+	const CHUNK_BYTES_MAX       = 256 * 1024 * 1024; // 256 MB máx de datos por chunk
+	const ASSEMBLY_TIME_MAX     = 20;    // Segundos máx por petición de ensamblaje
+	const ASSEMBLY_BYTES_MAX    = 512 * 1024 * 1024; // 512 MB máx de datos por petición de ensamblaje
 
 	public function __construct() {
 		add_action( 'wpamb_scheduled_backup', array( $this, 'run_scheduled_backup' ) );
@@ -292,16 +294,15 @@ class WPAMB_Backup_Manager {
 	}
 
 	// =========================================================================
-	// ENSAMBLAJE POR PASOS (un ZIP de parte por petición AJAX)
+	// ENSAMBLAJE POR PASOS (múltiples partes por petición AJAX)
 	// =========================================================================
 
 	/**
-	 * Añade UNA parte al ZIP maestro por petición.
-	 * - Llamada 0  : crea el ZIP maestro + database.sql + manifest.json + files_part_0001.zip
-	 * - Llamadas 1…N : abre el ZIP maestro existente y añade el siguiente files_part_NNNN.zip
+	 * Añade varias partes al ZIP maestro por petición hasta alcanzar el límite
+	 * de tiempo (ASSEMBLY_TIME_MAX) o de bytes (ASSEMBLY_BYTES_MAX).
+	 * - Llamada 0  : crea el ZIP maestro + database.sql + manifest.json + primeras partes
+	 * - Llamadas siguientes: abre el ZIP maestro existente y añade más partes
 	 * - Cuando idx >= total_parts : finaliza el backup
-	 *
-	 * Cada close() procesa exactamente UN fichero grande → nunca supera 30s.
 	 */
 	private function do_assembly_step( $state ) {
 		$parts_list  = $state['parts_list'];
@@ -346,28 +347,41 @@ class WPAMB_Backup_Manager {
 			$zip->addFile( $manifest_json, 'manifest.json' );
 		}
 
-		// Añadir la parte actual (si existe)
-		if ( $idx < $total_parts ) {
-			$part_basename = $parts_list[ $idx ];
+		// Añadir partes en bucle hasta alcanzar límite de tiempo o bytes
+		$bytes_added  = 0;
+		$parts_added  = 0;
+		$new_idx      = $idx;
+
+		while ( $new_idx < $total_parts ) {
+			$part_basename = $parts_list[ $new_idx ];
 			$part_path     = $state['tmp_dir'] . $part_basename;
+			$part_size     = file_exists( $part_path ) ? (int) @filesize( $part_path ) : 0;
+
+			// Parar si ya hemos acumulado suficientes bytes (pero siempre añadir al menos una parte)
+			if ( $parts_added > 0 && $bytes_added + $part_size > self::ASSEMBLY_BYTES_MAX ) break;
+			// Parar si ya llevamos demasiado tiempo (pero siempre añadir al menos una parte)
+			if ( $parts_added > 0 && ( microtime( true ) - $time_start ) >= self::ASSEMBLY_TIME_MAX ) break;
+
 			if ( file_exists( $part_path ) ) {
 				$zip->addFile( $part_path, $part_basename );
 				$zip->setCompressionName( $part_basename, ZipArchive::CM_STORE );
+				$bytes_added += $part_size;
 			}
+			$new_idx++;
+			$parts_added++;
 		}
 
-		// close() solo procesa UN fichero grande → rápido
+		// close() escribe todos los archivos añadidos en este paso
 		$zip->close();
 		$time_total = microtime( true ) - $time_start;
 
-		$new_idx              = $idx + 1;
 		$state['assembly_index'] = $new_idx;
 		update_option( self::CHUNK_STATE_OPTION, $state, false );
 
 		$pct = 93 + (int) ( ( $new_idx / max( $total_parts, 1 ) ) * 6 );
 		$this->set_progress(
 			min( $pct, 99 ),
-			sprintf( 'Ensamblando… %d/%d partes (%.1fs)', $new_idx, $total_parts, $time_total )
+			sprintf( 'Ensamblando… %d/%d partes (+%d esta vez, %.1fs)', $new_idx, $total_parts, $parts_added, $time_total )
 		);
 
 		// ¿Terminamos todas las partes? (o no había partes: solo BD+manifest)
