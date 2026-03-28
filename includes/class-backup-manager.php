@@ -162,6 +162,12 @@ class WPAMB_Backup_Manager {
 			wp_send_json_error( array( 'message' => 'Backup cancelado.' ) );
 		}
 
+		// ── Fase de ensamblaje: un ZIP de parte por petición ──
+		if ( ! empty( $state['phase'] ) && 'assembling' === $state['phase'] ) {
+			$this->do_assembly_step( $state );
+			return;
+		}
+
 		$offset     = (int) $state['offset'];
 		$total      = (int) $state['total'];
 		$part_num   = (int) $state['part_num'] + 1;
@@ -236,27 +242,25 @@ class WPAMB_Backup_Manager {
 		$state['part_num'] = $part_num;
 		update_option( self::CHUNK_STATE_OPTION, $state, false );
 
-		// ── ¿Terminamos todos los archivos? Ensamblar ZIP maestro ──
+		// ── ¿Terminamos todos los archivos? → Pasar a fase de ensamblaje por pasos ──
 		if ( $new_offset >= $total ) {
-			$this->set_progress( 93, sprintf( 'Todos los archivos comprimidos en %d partes. Ensamblando ZIP final…', $part_num ) );
+			$parts_found = glob( $state['tmp_dir'] . 'files_part_*.zip' ) ?: array();
+			sort( $parts_found );
+			$parts_list = array_values( array_map( 'basename', $parts_found ) );
 
-			$zip_path = WPAMB_BACKUP_DIR . $state['filename'];
-			$parts    = glob( $state['tmp_dir'] . 'files_part_*.zip' );
-			sort( $parts );
+			$state['phase']          = 'assembling';
+			$state['assembly_index'] = 0;
+			$state['parts_list']     = $parts_list;
+			update_option( self::CHUNK_STATE_OPTION, $state, false );
 
-			$result = $this->assemble_master_zip( $zip_path, $state['tmp_dir'], $parts, $state['include_db'] );
-			if ( is_wp_error( $result ) ) {
-				$this->abort_backup( $state );
-				wp_send_json_error( array( 'message' => $result->get_error_message() ) );
-			}
-
-			$this->finalize_backup( $zip_path, $state['tmp_dir'], $state['filename'], $state['include_files'], $state['include_db'], $state['type'] );
+			$this->set_progress( 93, sprintf( 'Todos los archivos comprimidos en %d partes. Iniciando ensamblaje…', count( $parts_list ) ) );
 
 			wp_send_json_success( array(
-				'done'     => true,
-				'filename' => $state['filename'],
-				'size'     => size_format( filesize( $zip_path ) ),
-				'url'      => $this->get_download_url( $state['filename'] ),
+				'done'           => false,
+				'assembling'     => true,
+				'assembly_index' => 0,
+				'total_parts'    => count( $parts_list ),
+				'percent'        => 93,
 			) );
 		}
 
@@ -272,7 +276,114 @@ class WPAMB_Backup_Manager {
 	}
 
 	// =========================================================================
-	// ENSAMBLAR ZIP MAESTRO
+	// ENSAMBLAJE POR PASOS (un ZIP de parte por petición AJAX)
+	// =========================================================================
+
+	/**
+	 * Añade UNA parte al ZIP maestro por petición.
+	 * - Llamada 0  : crea el ZIP maestro + database.sql + manifest.json + files_part_0001.zip
+	 * - Llamadas 1…N : abre el ZIP maestro existente y añade el siguiente files_part_NNNN.zip
+	 * - Cuando idx >= total_parts : finaliza el backup
+	 *
+	 * Cada close() procesa exactamente UN fichero grande → nunca supera 30s.
+	 */
+	private function do_assembly_step( $state ) {
+		$parts_list  = $state['parts_list'];
+		$idx         = (int) $state['assembly_index'];
+		$total_parts = count( $parts_list );
+		$zip_path    = WPAMB_BACKUP_DIR . $state['filename'];
+
+		$time_start = microtime( true );
+
+		// Primera llamada: crear ZIP maestro desde cero
+		$mode = ( 0 === $idx )
+			? ( ZipArchive::CREATE | ZipArchive::OVERWRITE )
+			: ZipArchive::CREATE;   // CREATE sin OVERWRITE = abrir existente para añadir
+
+		$zip = new ZipArchive();
+		if ( true !== $zip->open( $zip_path, $mode ) ) {
+			$this->abort_backup( $state );
+			wp_send_json_error( array( 'message' => 'No se pudo abrir el ZIP maestro en ensamblaje (parte ' . $idx . ').' ) );
+		}
+
+		// En la primera llamada: añadir database.sql + manifest.json
+		if ( 0 === $idx ) {
+			$sql_file = $state['tmp_dir'] . 'database.sql';
+			if ( $state['include_db'] && file_exists( $sql_file ) ) {
+				$zip->addFile( $sql_file, 'database.sql' );
+				$zip->setCompressionName( 'database.sql', ZipArchive::CM_STORE );
+			}
+
+			$manifest = array(
+				'plugin_version' => WPAMB_VERSION,
+				'wp_version'     => get_bloginfo( 'version' ),
+				'site_url'       => get_site_url(),
+				'created_at'     => current_time( 'mysql' ),
+				'include_files'  => $total_parts > 0,
+				'include_db'     => $state['include_db'],
+				'db_prefix'      => $GLOBALS['wpdb']->prefix,
+				'parts'          => $parts_list,
+				'format'         => 'multipart_v1',
+			);
+			$manifest_json = $state['tmp_dir'] . 'manifest.json';
+			file_put_contents( $manifest_json, wp_json_encode( $manifest, JSON_PRETTY_PRINT ) );
+			$zip->addFile( $manifest_json, 'manifest.json' );
+		}
+
+		// Añadir la parte actual (si existe)
+		if ( $idx < $total_parts ) {
+			$part_basename = $parts_list[ $idx ];
+			$part_path     = $state['tmp_dir'] . $part_basename;
+			if ( file_exists( $part_path ) ) {
+				$zip->addFile( $part_path, $part_basename );
+				$zip->setCompressionName( $part_basename, ZipArchive::CM_STORE );
+			}
+		}
+
+		// close() solo procesa UN fichero grande → rápido
+		$zip->close();
+		$time_total = microtime( true ) - $time_start;
+
+		$new_idx              = $idx + 1;
+		$state['assembly_index'] = $new_idx;
+		update_option( self::CHUNK_STATE_OPTION, $state, false );
+
+		$pct = 93 + (int) ( ( $new_idx / max( $total_parts, 1 ) ) * 6 );
+		$this->set_progress(
+			min( $pct, 99 ),
+			sprintf( 'Ensamblando… %d/%d partes (%.1fs)', $new_idx, $total_parts, $time_total )
+		);
+
+		// ¿Terminamos todas las partes? (o no había partes: solo BD+manifest)
+		if ( $new_idx >= $total_parts ) {
+			$this->finalize_backup(
+				$zip_path,
+				$state['tmp_dir'],
+				$state['filename'],
+				$state['include_files'],
+				$state['include_db'],
+				$state['type']
+			);
+			wp_send_json_success( array(
+				'done'     => true,
+				'filename' => $state['filename'],
+				'size'     => size_format( filesize( $zip_path ) ),
+				'url'      => $this->get_download_url( $state['filename'] ),
+			) );
+		}
+
+		wp_send_json_success( array(
+			'done'           => false,
+			'assembling'     => true,
+			'assembly_index' => $new_idx,
+			'total_parts'    => $total_parts,
+			'percent'        => min( $pct, 99 ),
+			'time_taken'     => round( $time_total, 2 ),
+		) );
+	}
+
+	// =========================================================================
+	// ENSAMBLAR ZIP MAESTRO (usado por backup programado vía cron)
 	// =========================================================================
 
 	/**

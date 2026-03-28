@@ -4,7 +4,7 @@ Tags: backup, database backup, file backup, restore, scheduled backup, migration
 Requires at least: 5.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 1.1.1
+Stable tag: 1.1.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -52,6 +52,10 @@ Sí. El plugin reemplaza automáticamente las URLs de la base de datos al restau
 Sí. Una vez que publiques una nueva release en GitHub con un tag de versión (ej: `v1.1.0`), el plugin aparecerá como actualización en el panel de WordPress.
 
 == Changelog ==
+
+= 1.1.2 =
+* Fix definitivo timeout en ensamblaje: el ZIP maestro se construye un fichero por petición AJAX en lugar de todo a la vez (un ZIP de parte ~20MB por llamada en vez de 600MB juntos)
+* Nueva fase "assembling" con barra de progreso propia en la UI
 
 = 1.1.1 =
 * Fix crítico: ZIP maestro usa CM_STORE (sin recomprimir) para los ZIPs de parte → close() deja de procesar cientos de MB de datos → resuelve timeout en el último chunk

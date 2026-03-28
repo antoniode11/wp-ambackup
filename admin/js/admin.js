@@ -93,6 +93,17 @@
 
 			if ( res.data.done ) {
 				backupCompleted( res.data );
+			} else if ( res.data.assembling ) {
+				// Fase de ensamblaje: un ZIP de parte por petición
+				var ai = res.data.assembly_index || 0;
+				var tp = res.data.total_parts    || 0;
+				updateProgress(
+					res.data.percent || 93,
+					'Ensamblando ZIP final… ' + ai + '/' + tp + ' partes'
+				);
+				setTimeout(function () {
+					processNextChunk( filename, offset, total, chunkSize );
+				}, 200 );
 			} else {
 				var pct          = res.data.percent         || 20;
 				var current      = res.data.offset          || offset;
