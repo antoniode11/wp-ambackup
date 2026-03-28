@@ -289,15 +289,19 @@ class WPAMB_Backup_Manager {
 			return new WP_Error( 'zip_master', 'No se pudo crear el ZIP maestro.' );
 		}
 
-		// Base de datos
+		// Base de datos — STORE sin recomprimir para que close() sea rápido
 		$sql_file = $tmp_dir . 'database.sql';
 		if ( $include_db && file_exists( $sql_file ) ) {
 			$zip->addFile( $sql_file, 'database.sql' );
+			$zip->setCompressionName( 'database.sql', ZipArchive::CM_STORE );
 		}
 
-		// Partes de archivos
+		// Partes de archivos — STORE: ya son ZIPs comprimidos, recomprimirlos
+		// haría que close() lea y procese cientos de MB → timeout garantizado.
 		foreach ( $parts as $part_path ) {
-			$zip->addFile( $part_path, basename( $part_path ) );
+			$entry = basename( $part_path );
+			$zip->addFile( $part_path, $entry );
+			$zip->setCompressionName( $entry, ZipArchive::CM_STORE );
 		}
 
 		// Manifiesto
@@ -316,7 +320,8 @@ class WPAMB_Backup_Manager {
 		file_put_contents( $manifest_json, wp_json_encode( $manifest, JSON_PRETTY_PRINT ) );
 		$zip->addFile( $manifest_json, 'manifest.json' );
 
-		// close() rápido: solo count($parts) + 2 entradas
+		// close() ahora solo copia bytes en crudo (sin decompresión/recompresión)
+		// → velocidad limitada por I/O de disco, no por CPU. Típicamente < 5s.
 		$zip->close();
 		return true;
 	}
