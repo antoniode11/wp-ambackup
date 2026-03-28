@@ -17,7 +17,7 @@ class WPAMB_Backup_Manager {
 	const CHUNK_STATE_OPTION   = 'wpamb_chunk_state';
 
 	/** Archivos por petición AJAX. Ajustable según el servidor. */
-	const CHUNK_SIZE = 1500;
+	const CHUNK_SIZE = 500;
 
 	public function __construct() {
 		add_action( 'wpamb_scheduled_backup', array( $this, 'run_scheduled_backup' ) );
