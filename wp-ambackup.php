@@ -3,7 +3,7 @@
  * Plugin Name: WP AMBackup
  * Plugin URI:  https://github.com/antoniode11/wp-ambackup
  * Description: Plugin completo de backup para WordPress. Crea, programa, importa y exporta backups de tu sitio web. Similar a All-in-One WP Migration.
- * Version:     1.1.4
+ * Version:     1.1.5
  * Author:      Tu Nombre
  * Author URI:  https://tu-sitio.com
  * License:     GPL-2.0+
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Constantes del plugin
-define( 'WPAMB_VERSION',     '1.1.4' );
+define( 'WPAMB_VERSION',     '1.1.5' );
 define( 'WPAMB_PLUGIN_FILE', __FILE__ );
 define( 'WPAMB_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'WPAMB_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
