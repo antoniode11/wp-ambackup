@@ -27,11 +27,11 @@ class WPAMB_Backup_Manager {
 	const CANCEL_OPTION      = 'wpamb_cancel_flag';
 	const CHUNK_STATE_OPTION = 'wpamb_chunk_state';
 
-	const CHUNK_SIZE_INITIAL = 300;   // Archivos por parte — ajuste dinámico posterior
+	const CHUNK_SIZE_INITIAL = 1000;  // Archivos por parte — ajuste dinámico posterior
 	const CHUNK_TIME_TARGET  = 12;    // Segundos objetivo por chunk
 	const CHUNK_SIZE_MIN     = 10;
-	const CHUNK_SIZE_MAX     = 1000;
-	const CHUNK_BYTES_MAX    = 8 * 1024 * 1024; // 8 MB máx de datos por chunk (para archivos grandes)
+	const CHUNK_SIZE_MAX     = 10000;
+	const CHUNK_BYTES_MAX    = 64 * 1024 * 1024; // 64 MB máx de datos por chunk
 
 	public function __construct() {
 		add_action( 'wpamb_scheduled_backup', array( $this, 'run_scheduled_backup' ) );
