@@ -4,7 +4,7 @@ Tags: backup, database backup, file backup, restore, scheduled backup, migration
 Requires at least: 5.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 1.1.3
+Stable tag: 1.1.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -52,6 +52,11 @@ Sí. El plugin reemplaza automáticamente las URLs de la base de datos al restau
 Sí. Una vez que publiques una nueva release en GitHub con un tag de versión (ej: `v1.1.0`), el plugin aparecerá como actualización en el panel de WordPress.
 
 == Changelog ==
+
+= 1.1.4 =
+* Fix: límite de 8 MB de datos por chunk además de límite de archivos → lotes con vídeos/fotos grandes ya no superan el tiempo
+* Reducido CHUNK_SIZE_INITIAL a 300 y MAX a 1000 para mayor seguridad
+* UI muestra MB procesados por lote para diagnóstico
 
 = 1.1.3 =
 * Fix definitivo timeout compresión: CM_STORE (sin compresión) en ZIPs de parte → close() es puro I/O sin CPU → 21s pasan a ~2s por lote

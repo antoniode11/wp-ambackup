@@ -110,10 +110,11 @@
 				var nextChunk    = res.data.next_chunk_size  || chunkSize;
 				var timeTaken    = res.data.time_taken       || 0;
 
+				var chunkMb = res.data.chunk_mb || 0;
 				updateProgress(
 					pct,
 					'Comprimiendo… ' + current + '/' + total +
-					' | Lote: ' + nextChunk + ' archivos | ' + timeTaken + 's'
+					' | ' + nextChunk + ' arch | ' + chunkMb + ' MB | ' + timeTaken + 's'
 				);
 
 				setTimeout(function () {

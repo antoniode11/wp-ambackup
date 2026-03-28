@@ -27,10 +27,11 @@ class WPAMB_Backup_Manager {
 	const CANCEL_OPTION      = 'wpamb_cancel_flag';
 	const CHUNK_STATE_OPTION = 'wpamb_chunk_state';
 
-	const CHUNK_SIZE_INITIAL = 1000;  // Archivos por parte — ajuste dinámico posterior
-	const CHUNK_TIME_TARGET  = 15;    // Segundos objetivo por chunk
-	const CHUNK_SIZE_MIN     = 50;
-	const CHUNK_SIZE_MAX     = 5000;
+	const CHUNK_SIZE_INITIAL = 300;   // Archivos por parte — ajuste dinámico posterior
+	const CHUNK_TIME_TARGET  = 12;    // Segundos objetivo por chunk
+	const CHUNK_SIZE_MIN     = 10;
+	const CHUNK_SIZE_MAX     = 1000;
+	const CHUNK_BYTES_MAX    = 8 * 1024 * 1024; // 8 MB máx de datos por chunk (para archivos grandes)
 
 	public function __construct() {
 		add_action( 'wpamb_scheduled_backup', array( $this, 'run_scheduled_backup' ) );
@@ -182,7 +183,18 @@ class WPAMB_Backup_Manager {
 			wp_send_json_error( array( 'message' => 'Lista de archivos corrupta.' ) );
 		}
 
-		$chunk = array_slice( $file_list, $offset, $chunk_size );
+		// Construir el chunk respetando límite de archivos Y límite de bytes.
+		// Esto evita que un lote de archivos grandes (vídeos, fotos) explote el tiempo.
+		$chunk       = array();
+		$chunk_bytes = 0;
+		foreach ( array_slice( $file_list, $offset ) as $fp ) {
+			if ( count( $chunk ) >= $chunk_size ) break;
+			$fsize        = file_exists( $fp ) ? (int) @filesize( $fp ) : 0;
+			$chunk[]      = $fp;
+			$chunk_bytes += $fsize;
+			// Parar si ya hemos acumulado suficientes bytes (aunque no lleguemos al límite de archivos)
+			if ( $chunk_bytes >= self::CHUNK_BYTES_MAX && count( $chunk ) > 1 ) break;
+		}
 
 		// ── Crear ZIP de parte independiente (SIEMPRE desde cero → close() rápido) ──
 		$part_zip_path = $state['tmp_dir'] . sprintf( 'files_part_%04d.zip', $part_num );
@@ -275,6 +287,7 @@ class WPAMB_Backup_Manager {
 			'next_chunk_size' => $next_chunk,
 			'time_taken'      => round( $time_total, 2 ),
 			'part_num'        => $part_num,
+			'chunk_mb'        => round( $chunk_bytes / 1024 / 1024, 1 ),
 		) );
 	}
 
