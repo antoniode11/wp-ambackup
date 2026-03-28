@@ -31,9 +31,9 @@ class WPAMB_Backup_Manager {
 	const CHUNK_TIME_TARGET     = 12;    // Segundos objetivo por chunk de compresión
 	const CHUNK_SIZE_MIN        = 10;
 	const CHUNK_SIZE_MAX        = 10000;
-	const CHUNK_BYTES_MAX       = 256 * 1024 * 1024; // 256 MB máx de datos por chunk
+	const CHUNK_BYTES_MAX       = 128 * 1024 * 1024; // 128 MB máx de datos por chunk (~20s en disco lento)
 	const ASSEMBLY_TIME_MAX     = 20;    // Segundos máx por petición de ensamblaje
-	const ASSEMBLY_BYTES_MAX    = 512 * 1024 * 1024; // 512 MB máx de datos por petición de ensamblaje
+	const ASSEMBLY_BYTES_MAX    = 256 * 1024 * 1024; // 256 MB máx de datos por petición de ensamblaje
 
 	public function __construct() {
 		add_action( 'wpamb_scheduled_backup', array( $this, 'run_scheduled_backup' ) );
