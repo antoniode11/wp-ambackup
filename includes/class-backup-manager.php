@@ -204,6 +204,9 @@ class WPAMB_Backup_Manager {
 				$relative = ltrim( str_replace( '\\', '/', substr( $file_path, strlen( $abspath ) ) ), '/' );
 				if ( preg_match( '/[\x00-\x1F\x7F]/', $relative ) ) continue;
 				$zip->addFile( $file_path, $relative );
+				// CM_STORE: sin compresión → close() es puro I/O, sin CPU → nunca timeout
+				// Los ZIPs de parte ya irán STORE en el ZIP maestro igualmente.
+				$zip->setCompressionName( $relative, ZipArchive::CM_STORE );
 				$processed++;
 			} catch ( Exception $e ) {
 				continue;
@@ -499,6 +502,7 @@ class WPAMB_Backup_Manager {
 						if ( ! file_exists( $fp ) ) continue;
 						$rel = ltrim( str_replace( '\\', '/', substr( $fp, strlen( $abspath ) ) ), '/' );
 						$zip->addFile( $fp, $rel );
+						$zip->setCompressionName( $rel, ZipArchive::CM_STORE );
 					}
 					$zip->close();
 					$parts[] = $part_path;
