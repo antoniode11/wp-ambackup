@@ -16,8 +16,11 @@ class WPAMB_Backup_Manager {
 	const CANCEL_OPTION        = 'wpamb_cancel_flag';
 	const CHUNK_STATE_OPTION   = 'wpamb_chunk_state';
 
-	/** Archivos por petición AJAX. Ajustable según el servidor. */
-	const CHUNK_SIZE = 500;
+	/** Chunk inicial. Se ajusta dinámicamente según el tiempo de respuesta. */
+	const CHUNK_SIZE_INITIAL = 100;
+	const CHUNK_TIME_TARGET  = 15; // segundos objetivo por chunk
+	const CHUNK_SIZE_MIN     = 10;
+	const CHUNK_SIZE_MAX     = 2000;
 
 	public function __construct() {
 		add_action( 'wpamb_scheduled_backup', array( $this, 'run_scheduled_backup' ) );
@@ -120,14 +123,13 @@ class WPAMB_Backup_Manager {
 	}
 
 	/**
-	 * PASO 2: Procesa un chunk de archivos.
-	 * Se llama repetidamente desde JS hasta que offset >= total.
+	 * PASO 2: Procesa un chunk de archivos con tamaño dinámico.
+	 * Mide el tiempo real de cada lote y ajusta el siguiente automáticamente.
 	 */
 	public function process_chunk_ajax() {
 		@ini_set( 'memory_limit', '512M' );
 		@set_time_limit( 300 );
 
-		// Capturar errores fatales PHP y devolverlos como JSON
 		register_shutdown_function( function () {
 			$error = error_get_last();
 			if ( $error && in_array( $error['type'], array( E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ), true ) ) {
@@ -147,86 +149,91 @@ class WPAMB_Backup_Manager {
 			wp_send_json_error( array( 'message' => __( 'Estado de backup no encontrado. Inicia el backup de nuevo.', 'wp-ambackup' ) ) );
 		}
 
-		// Cancelación
 		if ( get_option( self::CANCEL_OPTION ) ) {
 			$this->abort_chunk_backup( $state );
 			wp_send_json_error( array( 'message' => __( 'Backup cancelado.', 'wp-ambackup' ) ) );
 		}
 
-		$offset    = (int) $state['offset'];
-		$total     = (int) $state['total'];
-		$zip_path  = $state['zip_path'];
-		$list_file = $state['list_file'];
-		$tmp_dir   = $state['tmp_dir'];
+		$offset     = (int) $state['offset'];
+		$total      = (int) $state['total'];
+		$zip_path   = $state['zip_path'];
+		$list_file  = $state['list_file'];
+		$tmp_dir    = $state['tmp_dir'];
+		// Tamaño de chunk enviado por JS (ajustado dinámicamente)
+		$chunk_size = isset( $_POST['chunk_size'] ) ? max( self::CHUNK_SIZE_MIN, min( self::CHUNK_SIZE_MAX, (int) $_POST['chunk_size'] ) ) : self::CHUNK_SIZE_INITIAL;
 
-		// Leer lista de archivos
 		$file_list = json_decode( file_get_contents( $list_file ), true );
 		if ( ! is_array( $file_list ) ) {
 			$this->abort_chunk_backup( $state );
 			wp_send_json_error( array( 'message' => __( 'Lista de archivos corrupta.', 'wp-ambackup' ) ) );
 		}
 
-		$chunk = array_slice( $file_list, $offset, self::CHUNK_SIZE );
+		$chunk = array_slice( $file_list, $offset, $chunk_size );
 
-		// Añadir archivos del chunk al ZIP
-		$zip = new ZipArchive();
+		// Abrir ZIP
+		$zip  = new ZipArchive();
 		$mode = file_exists( $zip_path ) ? ZipArchive::CREATE : ( ZipArchive::CREATE | ZipArchive::OVERWRITE );
 		if ( true !== $zip->open( $zip_path, $mode ) ) {
 			$this->abort_chunk_backup( $state );
 			wp_send_json_error( array( 'message' => __( 'No se pudo abrir el ZIP para escritura.', 'wp-ambackup' ) ) );
 		}
 
-		$abspath  = rtrim( ABSPATH, '/\\' );
-		$skipped  = 0;
+		$abspath   = rtrim( ABSPATH, '/\\' );
+		$skipped   = 0;
+		$processed = 0;
+		$time_start = microtime( true );
+
 		foreach ( $chunk as $file_path ) {
-			// Saltar archivos no accesibles
 			if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-				$skipped++;
-				continue;
+				$skipped++; continue;
 			}
-			// Saltar archivos mayores de 500MB (evitan timeout)
-			if ( filesize( $file_path ) > 500 * 1024 * 1024 ) {
-				$skipped++;
-				continue;
+			if ( @filesize( $file_path ) > 500 * 1024 * 1024 ) {
+				$skipped++; continue;
 			}
 			try {
 				$relative = ltrim( str_replace( '\\', '/', substr( $file_path, strlen( $abspath ) ) ), '/' );
-				// Saltar si el nombre tiene caracteres problemáticos
 				if ( preg_match( '/[\x00-\x1F\x7F]/', $relative ) ) {
-					$skipped++;
-					continue;
+					$skipped++; continue;
 				}
 				$zip->addFile( $file_path, 'files/' . $relative );
+				$processed++;
 			} catch ( Exception $e ) {
-				$skipped++;
-				continue;
+				$skipped++; continue;
 			}
 		}
+
+		// Medir tiempo ANTES del close (el close puede tardar mucho en ZIPs grandes)
+		$time_before_close = microtime( true );
 		$zip->close();
+		$time_total = microtime( true ) - $time_start;
+		$time_close = microtime( true ) - $time_before_close;
+
+		// --- Calcular siguiente chunk_size dinámicamente ---
+		// Objetivo: que cada chunk dure self::CHUNK_TIME_TARGET segundos
+		// Si tardó menos → aumentar; si tardó más → reducir
+		if ( $time_total > 0 && $processed > 0 ) {
+			$ratio          = self::CHUNK_TIME_TARGET / max( $time_total, 1 );
+			$next_chunk     = (int) round( $chunk_size * $ratio );
+			// Aplicar límites y evitar cambios bruscos (máx ×2 o ÷2 por lote)
+			$next_chunk     = max( self::CHUNK_SIZE_MIN, min( self::CHUNK_SIZE_MAX, $next_chunk ) );
+			$next_chunk     = max( (int)( $chunk_size / 2 ), min( $chunk_size * 2, $next_chunk ) );
+		} else {
+			$next_chunk = $chunk_size;
+		}
 
 		$new_offset = $offset + count( $chunk );
 		$percent    = 20 + intval( ( $new_offset / max( $total, 1 ) ) * 70 );
 
 		$this->set_progress(
 			min( $percent, 90 ),
-			sprintf( __( 'Comprimiendo archivos… %d/%d', 'wp-ambackup' ), $new_offset, $total )
+			sprintf( __( 'Comprimiendo archivos… %d/%d (lote: %d archivos, %.1fs)', 'wp-ambackup' ), $new_offset, $total, $processed, $time_total )
 		);
 
-		// Actualizar offset en el estado
 		$state['offset'] = $new_offset;
 		update_option( self::CHUNK_STATE_OPTION, $state, false );
 
 		if ( $new_offset >= $total ) {
-			// Todos los chunks procesados → finalizar
-			$this->finalize_backup(
-				$zip_path,
-				$tmp_dir,
-				$state['filename'],
-				$state['include_files'],
-				$state['include_db'],
-				$state['type']
-			);
-
+			$this->finalize_backup( $zip_path, $tmp_dir, $state['filename'], $state['include_files'], $state['include_db'], $state['type'] );
 			wp_send_json_success( array(
 				'done'     => true,
 				'filename' => $state['filename'],
@@ -236,10 +243,13 @@ class WPAMB_Backup_Manager {
 		}
 
 		wp_send_json_success( array(
-			'done'       => false,
-			'offset'     => $new_offset,
-			'total'      => $total,
-			'percent'    => min( $percent, 90 ),
+			'done'           => false,
+			'offset'         => $new_offset,
+			'total'          => $total,
+			'percent'        => min( $percent, 90 ),
+			'next_chunk_size'=> $next_chunk,
+			'time_taken'     => round( $time_total, 2 ),
+			'time_close'     => round( $time_close, 2 ),
 		) );
 	}
 

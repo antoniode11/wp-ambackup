@@ -43,9 +43,10 @@
 				// Solo BD → completado en un paso
 				backupCompleted( res.data );
 			} else if ( res.data.chunking ) {
-				// Archivos → procesar chunks
-				updateProgress( 20, 'Preparado: ' + res.data.total_files + ' archivos en ' + res.data.total_chunks + ' lotes…' );
-				processNextChunk( res.data.filename, 0, res.data.total_files, res.data.total_chunks );
+				// Archivos → procesar chunks con tamaño inicial
+				var initialChunk = res.data.chunk_size || 100;
+				updateProgress( 20, 'Preparado: ' + res.data.total_files + ' archivos. Ajustando lote dinámicamente…' );
+				processNextChunk( res.data.filename, 0, res.data.total_files, initialChunk );
 			}
 		})
 		.fail(function () {
@@ -55,14 +56,15 @@
 
 	/**
 	 * Llama recursivamente al servidor para procesar cada chunk de archivos.
+	 * El chunk_size se ajusta dinámicamente según el tiempo de respuesta del servidor.
 	 */
-	function processNextChunk( filename, offset, total, totalChunks ) {
-		// ¿Cancelado?
+	function processNextChunk( filename, offset, total, chunkSize ) {
 		if ( ! backupRunning ) return;
 
 		$.post( wpamb.ajax_url, {
-			action: 'wpamb_backup_chunk',
-			nonce:  wpamb.nonce
+			action:     'wpamb_backup_chunk',
+			nonce:      wpamb.nonce,
+			chunk_size: chunkSize
 		})
 		.done(function ( res ) {
 			if ( ! res.success ) {
@@ -73,16 +75,20 @@
 			if ( res.data.done ) {
 				backupCompleted( res.data );
 			} else {
-				var pct     = res.data.percent || 20;
-				var current = res.data.offset  || offset;
+				var pct          = res.data.percent         || 20;
+				var current      = res.data.offset          || offset;
+				var nextChunk    = res.data.next_chunk_size  || chunkSize;
+				var timeTaken    = res.data.time_taken       || 0;
+
 				updateProgress(
 					pct,
-					'Comprimiendo archivos… ' + current + '/' + total
+					'Comprimiendo… ' + current + '/' + total +
+					' | Lote: ' + nextChunk + ' archivos | ' + timeTaken + 's'
 				);
-				// Pequeña pausa para no saturar el servidor
+
 				setTimeout(function () {
-					processNextChunk( filename, current, total, totalChunks );
-				}, 300 );
+					processNextChunk( filename, current, total, nextChunk );
+				}, 200 );
 			}
 		})
 		.fail(function () {
