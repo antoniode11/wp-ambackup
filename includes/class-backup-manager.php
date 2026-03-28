@@ -176,13 +176,31 @@ class WPAMB_Backup_Manager {
 			wp_send_json_error( array( 'message' => __( 'No se pudo abrir el ZIP para escritura.', 'wp-ambackup' ) ) );
 		}
 
-		$abspath = rtrim( ABSPATH, '/\\' );
+		$abspath  = rtrim( ABSPATH, '/\\' );
+		$skipped  = 0;
 		foreach ( $chunk as $file_path ) {
+			// Saltar archivos no accesibles
 			if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+				$skipped++;
 				continue;
 			}
-			$relative = ltrim( str_replace( '\\', '/', substr( $file_path, strlen( $abspath ) ) ), '/' );
-			$zip->addFile( $file_path, 'files/' . $relative );
+			// Saltar archivos mayores de 500MB (evitan timeout)
+			if ( filesize( $file_path ) > 500 * 1024 * 1024 ) {
+				$skipped++;
+				continue;
+			}
+			try {
+				$relative = ltrim( str_replace( '\\', '/', substr( $file_path, strlen( $abspath ) ) ), '/' );
+				// Saltar si el nombre tiene caracteres problemáticos
+				if ( preg_match( '/[\x00-\x1F\x7F]/', $relative ) ) {
+					$skipped++;
+					continue;
+				}
+				$zip->addFile( $file_path, 'files/' . $relative );
+			} catch ( Exception $e ) {
+				$skipped++;
+				continue;
+			}
 		}
 		$zip->close();
 
